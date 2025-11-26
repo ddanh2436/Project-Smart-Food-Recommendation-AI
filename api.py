@@ -1,4 +1,6 @@
+# ai-service/api.py
 import pandas as pd
+from pymongo import MongoClient
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from transformers import pipeline, AutoTokenizer, AutoModel
@@ -8,23 +10,23 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
-from pathlib import Path
-import os
 import math
 import re
 
-# -----------------------------------------------------------------
-# 1. CẤU HÌNH & MODELS
-# -----------------------------------------------------------------
+# --- CẤU HÌNH ---
+MONGO_URI = "mongodb://localhost:27017/"
+DB_NAME = "vietnomnom"      
+COLLECTION_NAME = "restaurants"
 
+# --- MODELS ---
 class RecommendRequest(BaseModel):
     query: str 
-    candidate_ids: Optional[List[int]] = []
+    candidate_ids: Optional[List[str]] = [] 
     user_gps: Optional[List[float]] = None
     city_filter: Optional[str] = None
 
 class TasteScore(BaseModel):
-    id: int
+    id: str             
     name: str 
     tags: str  
     S_taste: float
@@ -44,24 +46,32 @@ class SentimentResponse(BaseModel):
 
 # Hàm tính khoảng cách (Haversine)
 def calculate_distance(lat1, lon1, lat2, lon2):
-    if lat1 is None or lat2 is None or pd.isna(lat1) or pd.isna(lat2): return 999.0
+    # Kiểm tra dữ liệu đầu vào chặt chẽ hơn
+    if lat1 is None or lat2 is None or lon1 is None or lon2 is None: return 999.0
+    if pd.isna(lat1) or pd.isna(lat2) or pd.isna(lon1) or pd.isna(lon2): return 999.0
+    
     try:
+        # Ép kiểu float lần nữa để chắc chắn
+        lat1, lon1 = float(lat1), float(lon1)
+        lat2, lon2 = float(lat2), float(lon2)
+        
         R = 6371 
         dLat = math.radians(lat2 - lat1)
         dLon = math.radians(lon2 - lon1)
         a = math.sin(dLat/2) * math.sin(dLat/2) + \
             math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * \
-            math.sin(dLon/2) * math.sin(dLon/2)
+            math.sin(dLon / 2) * math.sin(dLon / 2)
         c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
         return R * c
-    except: return 999.0
+    except Exception as e:
+        return 999.0
 
 def get_semantic_vector(text, tokenizer, model):
     inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=256)
     with torch.no_grad(): outputs = model(**inputs)
     return outputs.last_hidden_state[:,0,:].numpy()
 
-print("--- KHỞI ĐỘNG SERVER AI (V-FINAL-RADIUS) ---")
+print("--- KHỞI ĐỘNG SERVER AI (V-FINAL-CLEAN-GPS) ---")
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -84,35 +94,132 @@ SORT_KNOWLEDGE_BASE = {
     'gần': 'distance', 'rẻ': 'price', 'ngon': 'rating', 'tốt nhất': 'rating'
 }
 LOCATION_NAMES = {
-    'hà nội': ['Hà Nội'], 'sài gòn': ['TPHCM'], 'tp.hcm': ['TPHCM'], 
-    'hồ chí minh': ['TPHCM'], 'quận 1': ['Quận 1']
+    'quận 1': 'Quận 1', 'q1': 'Quận 1', 'q 1': 'Quận 1',
+    'quận 2': 'Quận 2', 'q2': 'Quận 2', 'q 2': 'Quận 2',
+    'quận 3': 'Quận 3', 'q3': 'Quận 3', 'q 3': 'Quận 3',
+    'quận 4': 'Quận 4', 'q4': 'Quận 4', 'q 4': 'Quận 4',
+    'quận 5': 'Quận 5', 'q5': 'Quận 5', 'q 5': 'Quận 5',
+    'quận 6': 'Quận 6', 'q6': 'Quận 6', 'q 6': 'Quận 6',
+    'quận 7': 'Quận 7', 'q7': 'Quận 7', 'q 7': 'Quận 7',
+    'quận 8': 'Quận 8', 'q8': 'Quận 8', 'q 8': 'Quận 8',
+    'quận 9': 'Quận 9', 'q9': 'Quận 9', 'q 9': 'Quận 9',
+    'quận 10': 'Quận 10', 'q10': 'Quận 10', 'q 10': 'Quận 10',
+    'quận 11': 'Quận 11', 'q11': 'Quận 11', 'q 11': 'Quận 11',
+    'quận 12': 'Quận 12', 'q12': 'Quận 12', 'q 12': 'Quận 12',
+    'bình thạnh': 'Bình Thạnh', 'phú nhuận': 'Phú Nhuận',
+    'gò vấp': 'Gò Vấp', 'tân bình': 'Tân Bình',
+    'tân phú': 'Tân Phú', 'bình tân': 'Bình Tân',
+    'thủ đức': 'Thủ Đức', 'nhà bè': 'Nhà Bè', 'bình chánh': 'Bình Chánh',
+    'hóc môn': 'Hóc Môn', 'củ chi': 'Củ Chi', 'cần giờ': 'Cần Giờ',
+    'sài gòn': 'TPHCM', 'hcm': 'TPHCM', 'tphcm': 'TPHCM'
 }
 LOCATION_TRIGGERS = ['ở', 'tại', 'đến', 'thuộc']
 candidate_tags = [
+    'bánh tằm', 'cháo lòng', 'bún quậy', 'nui xào', 'mì xào', 
+    'bánh canh', 'bánh bột lọc', 'bánh bèo', 'bánh khọt', 'bánh hỏi',
+    'cháo', 'nui', 'miến', 'heo quay', 'vịt quay', 'bò né',
+    'lẩu gà lá é', 'gà nướng', 'cơm gà', 'bún chả cá', 'bún mắm',
+
     'bún bò', 'phở', 'cơm tấm', 'pizza', 'gà rán', 'bánh xèo', 'mì quảng', 'bún đậu', 'ốc', 'hải sản', 'sushi', 'lẩu', 'bò', 'hủ tiếu', 'nướng', 'bánh mì', 'cơm việt', 'dê', 'phá lấu', 'steak', 'ramen', 'dimsum', 'bánh canh', 'cua', 'mì ý', 'bia thủ công', 'chả cá', 'bingsu', 'xôi', 'cuốn', 'bò né', 'kem', 'xiên que', 'cơm niêu', 'cà phê vợt', 'cơm lam', 'đậu hũ', 'cay', 'ngọt', 'chay', 'mắm tôm', 'phô mai', 'miền trung', 'bắc', 'hàn quốc', 'ý', 'nhật', 'trung hoa', 'âu', 'miền nam', 'miền tây', 'vỉa hè', 'sang trọng', 'yên tĩnh', 'hẹn hò', 'truyền thống', 'nhậu', 'đêm', 'nhanh', 'buffet', 'mang đi', 'làm việc', 'gia đình', 'bình dân', 'dịch vụ', 'sáng', 'trưa', 'chè', 'ăn vặt', 'trà sữa', 'bánh', 'cơm', 'mì', 'gà', 'cá'
 ]
+
+# [MỚI] Hàm trích xuất quận từ địa chỉ
+def extract_district_from_address(address):
+    if not isinstance(address, str): return ''
+    addr_lower = address.lower()
+    
+    # Ưu tiên tìm các quận tên dài hoặc đặc biệt trước
+    if 'thủ đức' in addr_lower: return 'Thủ Đức'
+    if 'bình thạnh' in addr_lower: return 'Bình Thạnh'
+    if 'phú nhuận' in addr_lower: return 'Phú Nhuận'
+    if 'tân bình' in addr_lower: return 'Tân Bình'
+    if 'gò vấp' in addr_lower: return 'Gò Vấp'
+    if 'tân phú' in addr_lower: return 'Tân Phú'
+    if 'bình tân' in addr_lower: return 'Bình Tân'
+    if 'nhà bè' in addr_lower: return 'Nhà Bè'
+    if 'bình chánh' in addr_lower: return 'Bình Chánh'
+    if 'hóc môn' in addr_lower: return 'Hóc Môn'
+    if 'củ chi' in addr_lower: return 'Củ Chi'
+    if 'cần giờ' in addr_lower: return 'Cần Giờ'
+    
+    # Tìm quận số (Quận 1, Quận 10...)
+    # Dùng regex để tránh nhầm lẫn (ví dụ "Quận 1" vs "Quận 12")
+    for i in range(12, 0, -1):
+        q_name = f"quận {i}"
+        if q_name in addr_lower:
+            return f"Quận {i}"
+            
+    return ''
+
+# --- HÀM LÀM SẠCH DỮ LIỆU (QUAN TRỌNG) ---
+def clean_coordinate(val):
+    """Chuyển đổi tọa độ sang float, xử lý dấu phẩy"""
+    try:
+        if isinstance(val, (int, float)):
+            return float(val)
+        if isinstance(val, str):
+            # Thay dấu phẩy thành chấm và parse
+            return float(val.replace(',', '.'))
+        return 0.0
+    except:
+        return 0.0
 
 @app.on_event("startup")
 async def startup_event():
     global df, tfidf_vectorizer, tag_matrix, sentiment_pipeline, semantic_tokenizer, semantic_model, candidate_vectors
+    
     try:
-        BASE_DIR = Path(__file__).resolve().parent
-        CSV_PATH = os.path.normpath(BASE_DIR / 'restaurants.csv')
-        print(f"Đọc CSV: {CSV_PATH}")
-        df = pd.read_csv(CSV_PATH)
-        df['id'] = pd.to_numeric(df['id'], errors='coerce')
-        df = df.dropna(subset=['id'])
-        df['id'] = df['id'].astype(int)
-        df['tags'] = df['tags'].fillna('')
-        df['district'] = df['district'].fillna('').astype(str)
-        if 'lat' not in df.columns: df['lat'] = 0.0
-        if 'lon' not in df.columns: df['lon'] = 0.0
-        if 'price' not in df.columns: df['price'] = 0
+        print(f"Đang kết nối MongoDB: {DB_NAME}...")
+        client = MongoClient(MONGO_URI)
+        collection = client[DB_NAME][COLLECTION_NAME]
         
-        tfidf_vectorizer = TfidfVectorizer()
-        tag_matrix = tfidf_vectorizer.fit_transform(df['tags'])
-        print(f"AI GĐ 3A Sẵn sàng! (Data: {len(df)} quán)")
-    except Exception as e: print(f"Error loading CSV/Models: {e}")
+        cursor = collection.find({})
+        data_list = []
+        for doc in cursor:
+            doc['id'] = str(doc['_id'])
+            del doc['_id'] 
+            data_list.append(doc)
+        
+        if not data_list:
+            print("CẢNH BÁO: Database rỗng!")
+            df = pd.DataFrame(columns=['id', 'tenQuan', 'tags', 'diemTrungBinh', 'giaCa', 'lat', 'lon'])
+        else:
+            df = pd.DataFrame(data_list)
+            
+            rename_map = {
+                'tenQuan': 'name',
+                'diemTrungBinh': 'rating',
+                'giaCa': 'price',
+                'diaChi': 'address'
+            }
+            df.rename(columns=rename_map, inplace=True)
+
+            # 1. Xử lý Tags
+            df['tags'] = df['tags'].apply(lambda x: " ".join(x) if isinstance(x, list) else str(x))
+            df['tags'] = df['tags'].fillna('')
+            
+            # 2. Xử lý Tọa độ (FIX LỖI GPS)
+            if 'lat' in df.columns:
+                df['lat'] = df['lat'].apply(clean_coordinate)
+            else:
+                df['lat'] = 0.0
+
+            if 'lon' in df.columns:
+                df['lon'] = df['lon'].apply(clean_coordinate)
+            else:
+                df['lon'] = 0.0
+            
+            # Kiểm tra District
+            print("Đang trích xuất dữ liệu Quận/Huyện...")
+            df['district'] = df['address'].apply(extract_district_from_address)
+            
+            tfidf_vectorizer = TfidfVectorizer()
+            tag_matrix = tfidf_vectorizer.fit_transform(df['tags'])
+            print(f"AI Sẵn sàng! (Data từ Mongo: {len(df)} quán)")
+
+    except Exception as e:
+        print(f"Lỗi load MongoDB: {e}")
+        df = None
 
     try: sentiment_pipeline = pipeline("sentiment-analysis", model="5CD-AI/Vietnamese-Sentiment-visobert")
     except: pass
@@ -125,18 +232,17 @@ async def startup_event():
 
 @app.post("/recommend", response_model=RecommendResponse)
 async def handle_recommendation(request_data: RecommendRequest):
-    if df is None: raise HTTPException(status_code=503, detail="Models not loaded")
+    if df is None or df.empty: 
+        raise HTTPException(status_code=503, detail="Database empty")
     
     query_lower = request_data.query.lower()
     user_gps = request_data.user_gps
-    
     print(f"\n[Request] '{query_lower}'")
 
-    # --- BƯỚC 0: TÍNH KHOẢNG CÁCH TRƯỚC ---
-    # Tính khoảng cách cho TOÀN BỘ quán so với user_gps
-    # Để dùng cho việc lọc bán kính (Radius Filter)
     current_df = df.copy()
     distances = []
+    
+    # Tính khoảng cách
     for _, row in current_df.iterrows():
         d = 999.9
         if user_gps and len(user_gps) == 2:
@@ -144,21 +250,25 @@ async def handle_recommendation(request_data: RecommendRequest):
         distances.append(d)
     current_df['distance_km'] = distances
 
-    # --- PIPELINE XỬ LÝ QUERY ---
+    # --- LOGIC XỬ LÝ QUERY (GIỮ NGUYÊN) ---
     processed_query = " " + query_lower + " "
     sort_by = "taste"
     location_found = None
+    locations_to_filter = []
+
+    sorted_loc_keys = sorted(LOCATION_NAMES.keys(), key=len, reverse=True)
     
-    # Lớp 1: Location Command
-    for trig in LOCATION_TRIGGERS:
-        for k, v in LOCATION_NAMES.items():
-            if f" {trig} {k} " in processed_query:
-                location_found = v
-                processed_query = processed_query.replace(f" {trig} {k} ", " ")
-                break
-        if location_found: break
+    for k in sorted_loc_keys:
+        # Tìm chính xác từ khóa (có khoảng trắng bao quanh để tránh matching một phần)
+        if f" {k} " in processed_query:
+            real_name = LOCATION_NAMES[k]
+            locations_to_filter.append(real_name)
+            # Xóa từ khóa khỏi query để không ảnh hưởng tới tìm món ăn
+            processed_query = processed_query.replace(f" {k} ", " ")
+            location_found = real_name # Lưu lại để dùng cho logic cũ nếu cần
+
+    locations_to_filter = list(set(locations_to_filter))
         
-    # Lớp 1A & 1B
     for k, v in TAG_KNOWLEDGE_BASE.items():
         if f" {k} " in processed_query: processed_query = processed_query.replace(f" {k} ", f" {v} ")
     for k, v in SORT_KNOWLEDGE_BASE.items():
@@ -166,7 +276,6 @@ async def handle_recommendation(request_data: RecommendRequest):
             sort_by = v
             processed_query = processed_query.replace(f" {k} ", " ")
 
-    # Lớp 2: Fast Path
     extracted_tags = []
     sorted_candidates = sorted(candidate_tags, key=len, reverse=True)
     temp_query = processed_query
@@ -175,7 +284,6 @@ async def handle_recommendation(request_data: RecommendRequest):
             extracted_tags.append(tag)
             temp_query = temp_query.replace(f" {tag.lower()} ", " ")
 
-    # Lớp 3: Semantic
     if not extracted_tags and semantic_model:
         try:
             qv = get_semantic_vector(query_lower, semantic_tokenizer, semantic_model)
@@ -186,59 +294,47 @@ async def handle_recommendation(request_data: RecommendRequest):
     
     final_query = " ".join(extracted_tags) if extracted_tags else query_lower
     
-    # --- LỌC DỮ LIỆU (QUAN TRỌNG) ---
-    
-    if location_found:
-        # Kịch bản 1: User nói "ở Hà Nội"
-        # -> Lọc theo tên Địa danh, BỎ QUA GPS và Bán kính
-        print(f"-> Lọc theo Location: {location_found}")
-        filtered_df = current_df[current_df['district'].isin(location_found)]
-        
+    # --- LỌC DỮ LIỆU ---
+    if locations_to_filter:
+        print(f"-> Lọc theo Quận: {locations_to_filter}")
+        # Lọc các quán có district nằm trong danh sách tìm thấy
+        filtered_df = current_df[current_df['district'].isin(locations_to_filter)]
     elif request_data.city_filter:
-         # Kịch bản 2: Client test (cũ) gửi city_filter
          filtered_df = current_df[current_df['district'].str.contains(request_data.city_filter, case=False, na=False)]
-
     else:
-        # Kịch bản 3: MẶC ĐỊNH (User không nói địa danh)
-        # -> TỰ ĐỘNG LỌC BÁN KÍNH 20KM (Radius Filter)
-        # Đây là bước sửa lỗi "Phở Hà Nội hiện ở HCM"
-        print("-> Lọc theo Bán kính GPS (20km)")
-        filtered_df = current_df[current_df['distance_km'] <= 20.0]
-        
-        # Nếu Client có gửi candidate_ids (kiểu cũ), lọc thêm
+        # Logic Lọc Bán kính an toàn
+        if user_gps and len(user_gps) == 2:
+            print("-> Lọc theo Bán kính GPS (20km)")
+            filtered_df = current_df[current_df['distance_km'] <= 20.0]
+        else:
+            print("-> Không có GPS: Tìm toàn bộ quán.")
+            filtered_df = current_df
+
         if request_data.candidate_ids:
             filtered_df = filtered_df[filtered_df['id'].isin(request_data.candidate_ids)]
 
     if filtered_df.empty: return {"sort_by": sort_by, "scores": []}
 
-    # --- LỌC CỨNG TAGS (Sửa lỗi Cơm Tấm/Cơm Gà) ---
     if extracted_tags:
         tags_pattern = '|'.join([re.escape(t) for t in extracted_tags])
         strict_filtered_df = filtered_df[filtered_df['tags'].str.contains(tags_pattern, case=False, na=False)]
-        if not strict_filtered_df.empty:
-            filtered_df = strict_filtered_df
+        if not strict_filtered_df.empty: filtered_df = strict_filtered_df
 
-    # --- TÍNH ĐIỂM TASTE ---
-    # Chỉ tính điểm cho các quán đã lọc
     qv_3a = tfidf_vectorizer.transform([final_query])
     tm_filtered = tfidf_vectorizer.transform(filtered_df['tags'])
     taste_scores = cosine_similarity(qv_3a, tm_filtered).flatten()
     
-    # Gán điểm Taste vào DF (để sort)
-    # Lưu ý: filtered_df có thể là view, nên dùng .loc hoặc copy
     filtered_df = filtered_df.copy()
     filtered_df['S_taste'] = taste_scores
 
-    # Lọc điểm > 0
     if final_query.strip():
          final_candidates = filtered_df[filtered_df['S_taste'] > 0.001]
-         if final_candidates.empty and sort_by == 'distance':
-             final_candidates = filtered_df
-    else:
-         final_candidates = filtered_df
+         if final_candidates.empty and sort_by == 'distance': final_candidates = filtered_df
+    else: final_candidates = filtered_df
 
-    # --- SẮP XẾP ---
+    # Sắp xếp
     if sort_by == 'distance' and user_gps:
+        # [QUAN TRỌNG] Sắp xếp lại theo khoảng cách chính xác
         final_candidates = final_candidates.sort_values('distance_km', ascending=True)
     elif sort_by == 'price':
         final_candidates = final_candidates.sort_values('price', ascending=True)
@@ -249,13 +345,17 @@ async def handle_recommendation(request_data: RecommendRequest):
 
     scores_list = []
     for _, row in final_candidates.iterrows():
+        p_val = 0
+        try: p_val = int(str(row['price']).replace('.', '').replace(',', ''))
+        except: pass
+
         scores_list.append({
-            "id": int(row['id']),
+            "id": str(row['id']),
             "name": str(row['name']),
             "tags": str(row['tags']),
             "S_taste": float(row['S_taste']),
             "distance_km": float(row['distance_km']),
-            "price": int(row['price'])
+            "price": p_val
         })
         
     return {"sort_by": sort_by, "scores": scores_list}
