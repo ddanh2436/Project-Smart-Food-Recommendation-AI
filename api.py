@@ -61,20 +61,75 @@ sentiment_pipeline = None
 
 # --- CONSTANTS ---
 TAG_KNOWLEDGE_BASE = {
-    'lãng mạn': 'hẹn hò', 'sang chảnh': 'sang trọng', 'đắt tiền': 'sang trọng',
-    'thoải mái': 'yên tĩnh', 'nhanh gọn': 'nhanh', 'tụ tập': 'nhậu bạn bè', 
-    'đồng quê': 'cơm việt truyền thống', 'đặc sản huế': 'bún bò miền trung', 
-    'đặc sản hà nội': 'phở bún chả bắc', 'đặc sản sài gòn': 'cơm tấm miền nam'
+    # Về không gian/nhu cầu
+    'lãng mạn': 'hẹn hò', 'sang chảnh': 'sang trọng', 'đắt tiền': 'sang trọng', 'luxury': 'sang trọng',
+    'thoải mái': 'yên tĩnh', 'nhanh gọn': 'nhanh', 'tụ tập': 'nhậu', 'nhậu nhẹt': 'nhậu',
+    'bình dân': 'rẻ', 'hạt dẻ': 'rẻ', 'sinh viên': 'rẻ',
+    'mát mẻ': 'máy lạnh', 'điều hòa': 'máy lạnh',
+    'view đẹp': 'đẹp', 'sống ảo': 'đẹp',
+    
+    # Về món ăn (Vùng miền)
+    'đồng quê': 'cơm việt', 'cơm bắc': 'cơm việt', 'cơm niêu': 'cơm việt',
+    'đặc sản huế': 'bún bò huế', 'món huế': 'bún bò huế',
+    'đặc sản hà nội': 'bún chả', 'phở bắc': 'phở',
+    'đặc sản sài gòn': 'cơm tấm', 
+    'đồ nướng': 'nướng', 'bbq': 'nướng',
+    'hải sản tươi sống': 'hải sản'
 }
 
 EN_VI_MAPPING = {
-    'beef noodle': 'bún bò', 'pho': 'phở', 'broken rice': 'cơm tấm', 
-    'rice': 'cơm', 'bread': 'bánh mì', 'hotpot': 'lẩu', 'steak': 'bít tết', 
-    'seafood': 'hải sản', 'coffee': 'cà phê', 'vegetarian': 'chay',
-    'spicy': 'cay', 'delicious': 'ngon', 'cheap': 'rẻ', 'near': 'gần',
-    'district': 'quận', 'city': 'thành phố', 'restaurant': 'nhà hàng',
-    'late night': 'ăn đêm', 'morning': 'sáng', 'noon': 'trưa',
-    'best': 'ngon nhất', 'good': 'ngon'
+    # -- Món nước --
+    'beef noodle': 'bún bò', 'beef noodle soup': 'bún bò', 'bun bo': 'bún bò',
+    'pho': 'phở', 'noodle soup': 'phở', 'chicken noodle': 'phở gà',
+    'crab noodle': 'bún riêu', 'snail noodle': 'bún ốc',
+    'fish noodle': 'bún cá',
+    'hu tieu': 'hủ tiếu', 'vermicelli': 'bún', 'glass noodle': 'miến',
+    'ramen': 'mì nhật', 'udon': 'mì udon',
+    
+    # -- Cơm & Món mặn --
+    'broken rice': 'cơm tấm', 'com tam': 'cơm tấm', 'pork chop rice': 'cơm sườn',
+    'chicken rice': 'cơm gà', 'fried rice': 'cơm chiên',
+    'rice': 'cơm', 'sticky rice': 'xôi',
+    'braised pork': 'thịt kho', 'catfish': 'cá kho',
+    
+    # -- Bánh & Ăn vặt --
+    'bread': 'bánh mì', 'baguette': 'bánh mì', 'sandwich': 'bánh mì',
+    'pancake': 'bánh xèo', 'sizzling cake': 'bánh xèo',
+    'spring roll': 'gỏi cuốn', 'summer roll': 'gỏi cuốn', 'fresh roll': 'gỏi cuốn',
+    'fried roll': 'chả giò', 'egg roll': 'chả giò',
+    'steamed roll': 'bánh cuốn', 'dumpling': 'há cảo', 'dimsum': 'dimsum',
+    'snack': 'ăn vặt', 'street food': 'vỉa hè',
+    
+    # -- Lẩu & Nướng --
+    'hotpot': 'lẩu', 'thai hotpot': 'lẩu thái',
+    'bbq': 'nướng', 'grilled': 'nướng', 'steak': 'bít tết', 'beefsteak': 'bít tết',
+    
+    # -- Nguyên liệu --
+    'seafood': 'hải sản', 'fish': 'cá', 'crab': 'cua', 'shrimp': 'tôm', 
+    'snail': 'ốc', 'clam': 'nghêu', 'oyster': 'hàu',
+    'beef': 'bò', 'chicken': 'gà', 'pork': 'heo', 'duck': 'vịt', 'goat': 'dê',
+    'vegetarian': 'chay', 'vegan': 'chay', 'tofu': 'đậu hũ',
+    
+    # -- Đồ uống & Tráng miệng --
+    'coffee': 'cà phê', 'milk coffee': 'cà phê sữa', 'egg coffee': 'cà phê trứng',
+    'tea': 'trà', 'milk tea': 'trà sữa', 'bubble tea': 'trà sữa',
+    'juice': 'nước ép', 'smoothie': 'sinh tố', 'beer': 'bia',
+    'dessert': 'tráng miệng', 'sweet soup': 'chè', 'ice cream': 'kem', 'cake': 'bánh ngọt',
+    
+    # -- Tính chất --
+    'delicious': 'ngon', 'yummy': 'ngon', 'tasty': 'ngon', 'good': 'ngon', 'best': 'ngon nhất',
+    'cheap': 'rẻ', 'budget': 'rẻ', 'reasonable': 'rẻ', 'affordable': 'rẻ',
+    'expensive': 'sang trọng', 'luxury': 'sang trọng', 'fine dining': 'sang trọng',
+    'near': 'gần', 'nearby': 'gần', 'closest': 'gần',
+    'spicy': 'cay', 'hot': 'cay',
+    'nice view': 'đẹp', 'air conditioner': 'máy lạnh', 'ac': 'máy lạnh',
+    
+    # -- Thời gian & Địa điểm --
+    'late night': 'ăn đêm', 'night': 'đêm', 'midnight': 'đêm',
+    'morning': 'sáng', 'breakfast': 'sáng',
+    'lunch': 'trưa', 'noon': 'trưa',
+    'dinner': 'tối',
+    'district': 'quận', 'city': 'thành phố', 'hcmc': 'tphcm', 'saigon': 'sài gòn'
 }
 
 LOCATION_NAMES = {
@@ -90,15 +145,50 @@ LOCATION_NAMES = {
 }
 
 candidate_tags = [
-    'sáng', 'trưa', 'chiều', 'tối', 'đêm', 'ăn đêm', 
-    'bún bò', 'phở', 'cơm tấm', 'pizza', 'gà rán', 'bánh xèo', 'mì quảng', 
-    'bún đậu', 'ốc', 'hải sản', 'sushi', 'lẩu', 'bò', 'hủ tiếu', 'nướng', 
-    'bánh mì', 'cơm việt', 'dê', 'phá lấu', 'steak', 'ramen', 'dimsum', 
-    'cua', 'mì ý', 'bia thủ công', 'chả cá', 'bingsu', 'xôi', 'cuốn', 
-    'kem', 'xiên que', 'cơm niêu', 'cà phê vợt', 'cơm lam', 'đậu hũ', 
-    'cay', 'ngọt', 'chay', 'mắm tôm', 'phô mai', 'vỉa hè', 'sang trọng', 
-    'yên tĩnh', 'hẹn hò', 'truyền thống', 'nhậu', 'nhanh', 'buffet', 
-    'mang đi', 'gia đình', 'bình dân', 'chè', 'ăn vặt', 'trà sữa'
+    # -- Món Nước --
+    'bún bò', 'bún bò huế', 'bún riêu', 'bún mắm', 'bún chả', 'bún thịt nướng', 'bún đậu', 
+    'bún cá', 'bún mọc', 'bún thái', 'bún ốc', 'bún',
+    'phở', 'phở bò', 'phở gà', 'phở cuốn',
+    'hủ tiếu', 'hủ tiếu nam vang', 'hủ tiếu gõ', 'hủ tiếu mực',
+    'bánh canh', 'bánh canh cua', 'bánh canh ghẹ', 'bánh canh cá lóc',
+    'mì', 'mì quảng', 'mì vịt tiềm', 'mì ý', 'mì cay', 'mì xào', 'mì trộn', 'ramen', 'udon',
+    'miến', 'miến gà', 'miến lươn', 'miến xào',
+    'nui', 'nui xào', 'bò kho', 'lagu', 'cà ri', 'cháo', 'cháo lòng', 'cháo ếch', 'súp',
+
+    # -- Cơm --
+    'cơm tấm', 'cơm sườn', 'cơm gà', 'cơm gà xối mỡ', 'cơm niêu', 'cơm văn phòng', 
+    'cơm chiên', 'cơm rang', 'cơm lam', 'cơm phần', 'cơm',
+    'xôi', 'xôi gà', 'xôi mặn',
+    
+    # -- Món Mặn / Nhậu --
+    'lẩu', 'lẩu thái', 'lẩu bò', 'lẩu gà', 'lẩu dê', 'lẩu hải sản', 'lẩu mắm', 'lẩu cá',
+    'nướng', 'bbq', 'bò nướng', 'gà nướng', 'hải sản nướng', 'nem nướng',
+    'bít tết', 'bò né', 'bò bít tết', 'steak',
+    'hải sản', 'ốc', 'tôm', 'cua', 'ghẹ', 'hàu', 'mực', 'bạch tuộc',
+    'gà rán', 'gà luộc', 'gà ủ muối', 'vịt quay', 'heo quay', 'phá lấu',
+    'dê', 'cừu', 'ếch', 'lươn',
+    
+    # -- Bánh & Ăn vặt --
+    'bánh mì', 'bánh mì chảo', 'bánh mì xíu mại',
+    'bánh xèo', 'bánh khọt', 'bánh cuốn', 'bánh ướt', 'bánh bèo', 'bánh bột lọc', 'bánh nậm',
+    'gỏi cuốn', 'bì cuốn', 'chả giò', 'nem rán',
+    'pizza', 'hamburger', 'sushi', 'sashimi', 'dimsum', 'há cảo', 'xíu mại',
+    'ăn vặt', 'bánh tráng trộn', 'cá viên chiên', 'xiên que', 'bắp xào', 'hột vịt lộn',
+    
+    # -- Đồ uống & Tráng miệng --
+    'cà phê', 'cà phê sữa', 'cà phê trứng', 'cà phê vợt',
+    'trà sữa', 'trà đào', 'trà chanh', 'trà',
+    'sinh tố', 'nước ép', 'chè', 'kem', 'bingsu', 'tàu hũ', 'sữa chua', 'bánh ngọt',
+    'bia', 'bia thủ công', 'rượu', 'pub', 'bar',
+    
+    # -- Phong cách / Quốc gia --
+    'chay', 'thuần chay', 'healthy', 'eat clean',
+    'hàn quốc', 'nhật bản', 'trung hoa', 'thái lan', 'âu', 'mỹ', 'ý',
+    'vỉa hè', 'sang trọng', 'bình dân', 'gia đình', 'hẹn hò', 'nhậu', 'view đẹp',
+    'máy lạnh', 'sân vườn', 'yên tĩnh', 'nhanh', 'mang đi', 'buffet',
+    
+    # -- Thời gian (Quan trọng) --
+    'sáng', 'trưa', 'chiều', 'tối', 'đêm', 'ăn đêm', '24h'
 ]
 
 # Tags bắt buộc (Hard Filter) - Chỉ thời gian
