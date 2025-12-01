@@ -5,12 +5,17 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from transformers import pipeline
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, File, UploadFile # [THÊM File, UploadFile]
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import math
 import os
+
+# [THÊM CÁC THƯ VIỆN XỬ LÝ ẢNH]
+import io
+from PIL import Image
+from ultralytics import YOLO
 
 # --- CẤU HÌNH ---
 MONGO_URI = "mongodb+srv://quockhanh:quockhanh1234@vietnomnom.sxnsf4y.mongodb.net/?retryWrites=true&w=majority&appName=VietNomNom" 
@@ -58,6 +63,7 @@ app.add_middleware(
 df = None
 tfidf_vectorizer = None
 sentiment_pipeline = None
+yolo_model = None # [THÊM BIẾN MODEL YOLO]
 
 # --- CONSTANTS ---
 TAG_KNOWLEDGE_BASE = {
@@ -242,7 +248,7 @@ def calculate_distance(lat1, lon1, lat2, lon2):
 # --- STARTUP ---
 @app.on_event("startup")
 async def startup_event():
-    global df, tfidf_vectorizer, sentiment_pipeline
+    global df, tfidf_vectorizer, sentiment_pipeline, yolo_model # [KHAI BÁO BIẾN GLOBAL]
     print("-> Đang load dữ liệu...")
     try:
         client = MongoClient(MONGO_URI)
@@ -276,6 +282,15 @@ async def startup_event():
     try:
         sentiment_pipeline = pipeline("sentiment-analysis", model="5CD-AI/Vietnamese-Sentiment-visobert")
     except: pass
+
+    # [PHẦN MỚI: TẢI MODEL YOLO]
+    try:
+        print("-> Đang tải và khởi tạo YOLOv11m (Medium)...")
+        yolo_model = YOLO("yolo11m.pt") # Tự động tải file ~40MB
+        print("-> Load YOLO model thành công!")
+    except Exception as e:
+        print(f"!!! Lỗi load YOLO: {e}")
+        yolo_model = None
 
 @app.get("/")
 async def root():
@@ -344,14 +359,12 @@ async def handle_recommendation(request_data: RecommendRequest):
         return {"sort_by": "relevance", "scores": []}
         
     # --- BƯỚC 3: LỌC MÓN ĂN (Strict Dish Filter) ---
-    # Xác định món chính bằng cách loại bỏ các từ tính từ (rẻ, ngon, gần...)
     target_dish_tags = [t for t in extracted_tags if t not in ADJECTIVE_TAGS and t not in PRIORITY_TAGS]
     
     if target_dish_tags:
         matches = []
         for index, row in filtered_df.iterrows():
             row_tags = str(row['tags']).lower()
-            # Quán phải chứa ít nhất 1 món trong query
             if any(dish in row_tags for dish in target_dish_tags):
                 matches.append(index)
         
@@ -368,7 +381,6 @@ async def handle_recommendation(request_data: RecommendRequest):
     except:
         base_scores = [0.0] * len(filtered_df)
 
-    # Dish Boosting (Cộng điểm nếu tên món xuất hiện trong Tên quán)
     boosted_scores = []
     for idx, row in enumerate(filtered_df.itertuples()):
         score = base_scores[idx]
@@ -376,7 +388,7 @@ async def handle_recommendation(request_data: RecommendRequest):
         if target_dish_tags:
             for dish in target_dish_tags:
                 if dish in row_name:
-                    score += 0.3 # Cộng điểm nếu tên quán có tên món
+                    score += 0.3 
         boosted_scores.append(score)
 
     filtered_df = filtered_df.copy()
@@ -394,7 +406,6 @@ async def handle_recommendation(request_data: RecommendRequest):
     elif "rẻ" in query_lower:
         sort_by = "price"
         final_candidates = final_candidates.sort_values('price', ascending=True)
-    # [MỚI] Sort theo Rating
     elif any(x in query_lower for x in ['ngon', 'tốt nhất', 'nổi tiếng', 'rating', 'đánh giá']):
         sort_by = "rating"
         final_candidates = final_candidates.sort_values('rating', ascending=False)
@@ -420,6 +431,59 @@ async def handle_sentiment(request_data: SentimentRequest):
         return {"label": "neutral", "score": 0.5} 
     res = sentiment_pipeline(request_data.review)[0]
     return {"label": res['label'], "score": res['score']}
+
+# [HÀM MỚI: XỬ LÝ ẢNH VỚI YOLO]
+@app.post("/predict-food")
+async def predict_food(file: UploadFile = File(...)):
+    if not yolo_model:
+        raise HTTPException(status_code=503, detail="Model AI chưa sẵn sàng")
+    
+    try:
+        # 1. Đọc ảnh từ file upload
+        contents = await file.read()
+        image = Image.open(io.BytesIO(contents))
+        
+        # 2. Dự đoán
+        results = yolo_model(image)
+        
+        # 3. Lấy class có confidence cao nhất
+        detected_name = ""
+        max_conf = 0.0
+        
+        if results and len(results) > 0:
+            result = results[0]
+            if result.boxes:
+                # Sắp xếp box theo confidence và lấy cái tốt nhất
+                top_box = sorted(result.boxes, key=lambda x: x.conf, reverse=True)[0]
+                max_conf = float(top_box.conf)
+                cls_id = int(top_box.cls)
+                detected_name = result.names[cls_id] 
+
+        if not detected_name:
+            return {"food_name": None, "message": "Không nhận diện được món ăn"}
+
+        # 4. Map tên tiếng Anh sang tiếng Việt (dùng từ điển có sẵn)
+        name_lower = detected_name.lower().replace("_", " ") 
+        translated_name = EN_VI_MAPPING.get(name_lower, name_lower)
+
+        # Fallback: tìm kiếm gần đúng nếu không khớp chính xác
+        if translated_name == name_lower: 
+             for k, v in EN_VI_MAPPING.items():
+                 if name_lower in k:
+                     translated_name = v
+                     break
+
+        print(f"AI Detected: {detected_name} -> {translated_name}")
+
+        return {
+            "food_name": translated_name, 
+            "original_name": detected_name,
+            "confidence": max_conf
+        }
+
+    except Exception as e:
+        print(f"Lỗi dự đoán ảnh: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     uvicorn.run("api:app", host="127.0.0.1", port=5000, reload=True)
