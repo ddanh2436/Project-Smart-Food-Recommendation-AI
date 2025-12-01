@@ -139,15 +139,65 @@ EN_VI_MAPPING = {
 }
 
 LOCATION_NAMES = {
-    'quận 1': 'Quận 1', 'q1': 'Quận 1', 'quận 2': 'Quận 2', 'q2': 'Quận 2',
-    'quận 3': 'Quận 3', 'q3': 'Quận 3', 'quận 4': 'Quận 4', 'q4': 'Quận 4',
-    'quận 5': 'Quận 5', 'q5': 'Quận 5', 'quận 6': 'Quận 6', 'q6': 'Quận 6',
-    'quận 7': 'Quận 7', 'q7': 'Quận 7', 'quận 8': 'Quận 8', 'q8': 'Quận 8',
-    'quận 9': 'Quận 9', 'q9': 'Quận 9', 'quận 10': 'Quận 10', 'q10': 'Quận 10',
-    'quận 11': 'Quận 11', 'q11': 'Quận 11', 'quận 12': 'Quận 12', 'q12': 'Quận 12',
-    'bình thạnh': 'Bình Thạnh', 'phú nhuận': 'Phú Nhuận', 'gò vấp': 'Gò Vấp',
-    'tân bình': 'Tân Bình', 'tân phú': 'Tân Phú', 'bình tân': 'Bình Tân',
-    'thủ đức': 'Thủ Đức', 'sài gòn': 'TPHCM', 'hcm': 'TPHCM'
+    # --- TP. HỒ CHÍ MINH ---
+    'quận 1': 'Quận 1', 'q1': 'Quận 1', 
+    'quận 2': 'Quận 2', 'q2': 'Quận 2',
+    'quận 3': 'Quận 3', 'q3': 'Quận 3', 
+    'quận 4': 'Quận 4', 'q4': 'Quận 4',
+    'quận 5': 'Quận 5', 'q5': 'Quận 5', 
+    'quận 6': 'Quận 6', 'q6': 'Quận 6',
+    'quận 7': 'Quận 7', 'q7': 'Quận 7', 
+    'quận 8': 'Quận 8', 'q8': 'Quận 8',
+    'quận 9': 'Quận 9', 'q9': 'Quận 9', 
+    'quận 10': 'Quận 10', 'q10': 'Quận 10',
+    'quận 11': 'Quận 11', 'q11': 'Quận 11', 
+    'quận 12': 'Quận 12', 'q12': 'Quận 12',
+    'bình thạnh': 'Bình Thạnh', 'bt': 'Bình Thạnh',
+    'phú nhuận': 'Phú Nhuận', 'pn': 'Phú Nhuận',
+    'gò vấp': 'Gò Vấp', 'gv': 'Gò Vấp',
+    'tân bình': 'Tân Bình', 'tb': 'Tân Bình',
+    'tân phú': 'Tân Phú', 'tp': 'Tân Phú',
+    'bình tân': 'Bình Tân', 
+    'thủ đức': 'Thủ Đức', 'tđ': 'Thủ Đức',
+    'sài gòn': 'TPHCM', 'hcm': 'TPHCM', 'tphcm': 'TPHCM',
+    'bình chánh': 'Bình Chánh', 'hóc môn': 'Hóc Môn', 
+    'củ chi': 'Củ Chi', 'nhà bè': 'Nhà Bè', 'cần giờ': 'Cần Giờ',
+
+    # --- HÀ NỘI ---
+    'hà nội': 'Hà Nội', 'hn': 'Hà Nội', 'thủ đô': 'Hà Nội',
+    'ba đình': 'Ba Đình', 'bđ': 'Ba Đình',
+    'hoàn kiếm': 'Hoàn Kiếm', 'hk': 'Hoàn Kiếm',
+    'tây hồ': 'Tây Hồ', 
+    'long biên': 'Long Biên', 'lb': 'Long Biên',
+    'cầu giấy': 'Cầu Giấy', 'cg': 'Cầu Giấy',
+    'đống đa': 'Đống Đa', 'đđ': 'Đống Đa',
+    'hai bà trưng': 'Hai Bà Trưng', 'hbt': 'Hai Bà Trưng',
+    'hoàng mai': 'Hoàng Mai', 'hm': 'Hoàng Mai',
+    'thanh xuân': 'Thanh Xuân', 'tx': 'Thanh Xuân',
+    'sóc sơn': 'Sóc Sơn', 'đông anh': 'Đông Anh', 'gia lâm': 'Gia Lâm',
+    'nam từ liêm': 'Nam Từ Liêm', 'ntl': 'Nam Từ Liêm',
+    'bắc từ liêm': 'Bắc Từ Liêm', 'btl': 'Bắc Từ Liêm',
+    'hà đông': 'Hà Đông', 'hđ': 'Hà Đông',
+    'sơn tây': 'Sơn Tây', 'ba vì': 'Ba Vì', 'phúc thọ': 'Phúc Thọ',
+    'đan phượng': 'Đan Phượng', 'hoài đức': 'Hoài Đức', 'quốc oai': 'Quốc Oai',
+    'thạch thất': 'Thạch Thất', 'chương mỹ': 'Chương Mỹ', 'thanh oai': 'Thanh Oai',
+    'thường tín': 'Thường Tín', 'phú xuyên': 'Phú Xuyên', 'ứng hòa': 'Ứng Hòa',
+    'mỹ đức': 'Mỹ Đức', 'mê linh': 'Mê Linh', 'thanh trì': 'Thanh Trì',
+
+    # --- ĐÀ NẴNG (Mới thêm) ---
+    'đà nẵng': 'Đà Nẵng', 'đn': 'Đà Nẵng', 'dn': 'Đà Nẵng',
+    
+    # 6 Quận nội thành
+    'hải châu': 'Hải Châu', 'hc': 'Hải Châu',
+    'thanh khê': 'Thanh Khê', 'tk': 'Thanh Khê',
+    'sơn trà': 'Sơn Trà', 'st': 'Sơn Trà',
+    'ngũ hành sơn': 'Ngũ Hành Sơn', 'nhs': 'Ngũ Hành Sơn',
+    'liên chiểu': 'Liên Chiểu', 'lc': 'Liên Chiểu',
+    'cẩm lệ': 'Cẩm Lệ', 'cl': 'Cẩm Lệ',
+    
+    # 2 Huyện
+    'hòa vang': 'Hòa Vang',
+    'hoàng sa': 'Hoàng Sa',
 }
 
 candidate_tags = [
@@ -381,14 +431,31 @@ async def handle_recommendation(request_data: RecommendRequest):
     except:
         base_scores = [0.0] * len(filtered_df)
 
+    # --- [UPDATE] LOGIC BOOSTING MỚI ---
     boosted_scores = []
+    
+    # Chuẩn bị query sạch để so sánh tên
+    # Lấy query đã dịch nhưng chưa tách tag để giữ nguyên tên riêng (như "Hoàng Ty")
+    name_query = processed_query.lower().strip() 
+
     for idx, row in enumerate(filtered_df.itertuples()):
         score = base_scores[idx]
         row_name = str(row.name).lower()
+        
+        # 1. Dish Boosting (Logic cũ của bạn - giữ nguyên)
         if target_dish_tags:
             for dish in target_dish_tags:
                 if dish in row_name:
                     score += 0.3 
+
+        # 2. [NEW] Name Boosting (Cộng điểm thương hiệu)
+        # Nếu người dùng search "Hoàng Ty", và tên quán chứa "Hoàng Ty" -> Cộng điểm cực lớn
+        if len(name_query) > 2: # Chỉ check nếu query đủ dài (tránh search "a", "b")
+            if name_query == row_name:
+                score += 10.0 # Trùng khớp hoàn toàn -> Lên Top 1 ngay lập tức
+            elif name_query in row_name:
+                score += 5.0  # Chứa tên -> Lên Top
+        
         boosted_scores.append(score)
 
     filtered_df = filtered_df.copy()
