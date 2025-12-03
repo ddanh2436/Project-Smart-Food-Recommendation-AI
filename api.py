@@ -5,14 +5,12 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from transformers import pipeline
 import uvicorn
-from fastapi import FastAPI, HTTPException, File, UploadFile # [THÊM File, UploadFile]
+from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import math
 import os
-
-# [THÊM CÁC THƯ VIỆN XỬ LÝ ẢNH]
 import io
 from PIL import Image
 from ultralytics import YOLO
@@ -49,7 +47,7 @@ class SentimentResponse(BaseModel):
     score: float
 
 # --- LOGIC APP ---
-print("--- KHỞI ĐỘNG SERVER AI (FINAL PRODUCTION) ---")
+print("--- KHỞI ĐỘNG SERVER AI (FINAL PRODUCTION - FIX HANOI SEARCH) ---")
 app = FastAPI()
 
 app.add_middleware(
@@ -63,7 +61,7 @@ app.add_middleware(
 df = None
 tfidf_vectorizer = None
 sentiment_pipeline = None
-yolo_model = None # [THÊM BIẾN MODEL YOLO]
+yolo_model = None
 
 # --- CONSTANTS ---
 TAG_KNOWLEDGE_BASE = {
@@ -184,21 +182,19 @@ LOCATION_NAMES = {
     'thường tín': 'Thường Tín', 'phú xuyên': 'Phú Xuyên', 'ứng hòa': 'Ứng Hòa',
     'mỹ đức': 'Mỹ Đức', 'mê linh': 'Mê Linh', 'thanh trì': 'Thanh Trì',
 
-    # --- ĐÀ NẴNG (Mới thêm) ---
+    # --- ĐÀ NẴNG ---
     'đà nẵng': 'Đà Nẵng', 'đn': 'Đà Nẵng', 'dn': 'Đà Nẵng',
-    
-    # 6 Quận nội thành
     'hải châu': 'Hải Châu', 'hc': 'Hải Châu',
     'thanh khê': 'Thanh Khê', 'tk': 'Thanh Khê',
     'sơn trà': 'Sơn Trà', 'st': 'Sơn Trà',
     'ngũ hành sơn': 'Ngũ Hành Sơn', 'nhs': 'Ngũ Hành Sơn',
     'liên chiểu': 'Liên Chiểu', 'lc': 'Liên Chiểu',
     'cẩm lệ': 'Cẩm Lệ', 'cl': 'Cẩm Lệ',
-    
-    # 2 Huyện
-    'hòa vang': 'Hòa Vang',
-    'hoàng sa': 'Hoàng Sa',
+    'hòa vang': 'Hòa Vang', 'hoàng sa': 'Hoàng Sa',
 }
+
+# [DANH SÁCH THÀNH PHỐ LỚN] - Dùng để lọc rộng hơn
+MAJOR_CITIES = ['Hà Nội', 'TPHCM', 'Đà Nẵng']
 
 candidate_tags = [
     # -- Món Nước --
@@ -243,15 +239,11 @@ candidate_tags = [
     'vỉa hè', 'sang trọng', 'bình dân', 'gia đình', 'hẹn hò', 'nhậu', 'view đẹp',
     'máy lạnh', 'sân vườn', 'yên tĩnh', 'nhanh', 'mang đi', 'buffet',
     
-    # -- Thời gian (Quan trọng) --
+    # -- Thời gian --
     'sáng', 'trưa', 'chiều', 'tối', 'đêm', 'ăn đêm', '24h'
 ]
 
-# Tags bắt buộc (Hard Filter) - Chỉ thời gian
 PRIORITY_TAGS = ['đêm', 'sáng', 'trưa', 'chiều', 'tối', 'ăn đêm']
-
-# Tags tính từ (Dùng để loại trừ khi xác định Món Chính để lọc Strict)
-# Đã thêm 'ngon', 'tốt nhất' vào đây để tránh hệ thống tưởng đây là tên món ăn
 ADJECTIVE_TAGS = ['rẻ', 'gần', 'ngon', 'tốt', 'nhanh', 'đẹp', 'vỉa hè', 'sang trọng', 'yên tĩnh', 'nổi tiếng', 'nhất']
 
 # --- HELPER FUNCTIONS ---
@@ -262,18 +254,30 @@ def clean_coordinate(val):
         return 0.0
     except: return 0.0
 
+def clean_price(val):
+    try:
+        s = str(val)
+        clean_s = ''.join(filter(str.isdigit, s))
+        if clean_s:
+            return float(clean_s)
+        return 0.0
+    except:
+        return 0.0
+
+# [FIX] Sửa lại hàm trích xuất địa chỉ: Bỏ điều kiện 'quận' và ưu tiên chuỗi dài nhất
 def extract_district_from_address(address):
     if not isinstance(address, str): return ''
     addr_lower = address.lower()
-    for k, v in LOCATION_NAMES.items():
-        if k in addr_lower and 'quận' in k: return v
-    if 'thủ đức' in addr_lower: return 'Thủ Đức'
-    if 'bình thạnh' in addr_lower: return 'Bình Thạnh'
-    if 'phú nhuận' in addr_lower: return 'Phú Nhuận'
-    if 'tân bình' in addr_lower: return 'Tân Bình'
-    if 'gò vấp' in addr_lower: return 'Gò Vấp'
-    if 'tân phú' in addr_lower: return 'Tân Phú'
-    if 'bình tân' in addr_lower: return 'Bình Tân'
+    
+    # Sắp xếp keys theo độ dài giảm dần để ưu tiên từ khóa dài
+    # VD: Nếu địa chỉ là "Quận 12", nó sẽ khớp "Quận 12" trước thay vì "Quận 1"
+    sorted_locations = sorted(LOCATION_NAMES.keys(), key=len, reverse=True)
+    
+    for k in sorted_locations:
+        # Chỉ cần tên địa danh nằm trong địa chỉ là lấy (Bỏ điều kiện 'quận' in k)
+        if k in addr_lower:
+            return LOCATION_NAMES[k]
+            
     return ''
 
 def translate_query(query):
@@ -298,7 +302,7 @@ def calculate_distance(lat1, lon1, lat2, lon2):
 # --- STARTUP ---
 @app.on_event("startup")
 async def startup_event():
-    global df, tfidf_vectorizer, sentiment_pipeline, yolo_model # [KHAI BÁO BIẾN GLOBAL]
+    global df, tfidf_vectorizer, sentiment_pipeline, yolo_model
     print("-> Đang load dữ liệu...")
     try:
         client = MongoClient(MONGO_URI)
@@ -314,10 +318,17 @@ async def startup_event():
             temp_df.rename(columns=rename_map, inplace=True)
             
             temp_df['tags'] = temp_df['tags'].apply(lambda x: " ".join(x) if isinstance(x, list) else str(x)).fillna('')
+            
             if 'lat' in temp_df.columns: temp_df['lat'] = temp_df['lat'].apply(clean_coordinate)
             else: temp_df['lat'] = 0.0
             if 'lon' in temp_df.columns: temp_df['lon'] = temp_df['lon'].apply(clean_coordinate)
             else: temp_df['lon'] = 0.0
+            
+            if 'price' not in temp_df.columns:
+                temp_df['price'] = 0.0
+            else:
+                temp_df['price'] = temp_df['price'].apply(clean_price)
+                
             temp_df['district'] = temp_df['address'].apply(extract_district_from_address)
             
             df = temp_df
@@ -333,10 +344,9 @@ async def startup_event():
         sentiment_pipeline = pipeline("sentiment-analysis", model="5CD-AI/Vietnamese-Sentiment-visobert")
     except: pass
 
-    # [PHẦN MỚI: TẢI MODEL YOLO]
     try:
         print("-> Đang tải và khởi tạo YOLOv11m (Medium)...")
-        yolo_model = YOLO("yolo11m.pt") # Tự động tải file ~40MB
+        yolo_model = YOLO("yolo11m.pt")
         print("-> Load YOLO model thành công!")
     except Exception as e:
         print(f"!!! Lỗi load YOLO: {e}")
@@ -359,7 +369,6 @@ async def handle_recommendation(request_data: RecommendRequest):
     
     current_df = df.copy()
     
-    # Tính khoảng cách
     if user_gps and len(user_gps) == 2:
         current_df['distance_km'] = current_df.apply(lambda row: calculate_distance(user_gps[0], user_gps[1], row['lat'], row['lon']), axis=1)
     else:
@@ -367,18 +376,15 @@ async def handle_recommendation(request_data: RecommendRequest):
         
     temp_query = " " + processed_query.lower() + " "
     
-    # Mapping Synonyms
     for k, v in TAG_KNOWLEDGE_BASE.items():
         if f" {k} " in temp_query: temp_query = temp_query.replace(f" {k} ", f" {v} ")
 
-    # Extract Location
     locations_to_filter = []
     for k, v in LOCATION_NAMES.items():
         if f" {k} " in temp_query:
             locations_to_filter.append(v)
             temp_query = temp_query.replace(f" {k} ", " ")
     
-    # Extract Tags
     extracted_tags = []
     sorted_candidates = sorted(candidate_tags, key=len, reverse=True)
     for tag in sorted_candidates:
@@ -386,21 +392,33 @@ async def handle_recommendation(request_data: RecommendRequest):
             extracted_tags.append(tag)
             temp_query = temp_query.replace(f" {tag} ", " ")
             
-    # Phân loại Tags
     mandatory_tags = [t for t in extracted_tags if t in PRIORITY_TAGS]
     
     # --- BƯỚC 1: LỌC CƠ BẢN (Location, GPS) ---
     filtered_df = current_df
     
     if locations_to_filter:
-        filtered_df = filtered_df[filtered_df['district'].isin(locations_to_filter)]
+        # [FIX] Logic thông minh hơn cho việc lọc địa điểm
+        # Tách ra: Đâu là Tên thành phố, đâu là tên Quận huyện
+        city_filters = [loc for loc in locations_to_filter if loc in MAJOR_CITIES]
+        district_filters = [loc for loc in locations_to_filter if loc not in MAJOR_CITIES]
+
+        if city_filters:
+            # Nếu user tìm "Hà Nội" -> Tìm trong toàn bộ địa chỉ (vì quận Ba Đình cũng thuộc HN)
+            pattern = '|'.join(city_filters)
+            filtered_df = filtered_df[filtered_df['address'].str.contains(pattern, case=False, na=False)]
+        
+        if district_filters:
+             # Nếu user tìm "Ba Đình" -> Tìm chính xác trong cột district đã extract
+             filtered_df = filtered_df[filtered_df['district'].isin(district_filters)]
+
     elif request_data.city_filter:
         filtered_df = filtered_df[filtered_df['district'].str.contains(request_data.city_filter, case=False, na=False)]
     else:
         if user_gps and len(user_gps) == 2:
             filtered_df = filtered_df[filtered_df['distance_km'] <= 20.0]
             
-    # --- BƯỚC 2: LỌC THỜI GIAN (Hard Filter) ---
+    # --- BƯỚC 2: LỌC THỜI GIAN ---
     if mandatory_tags:
         for tag in mandatory_tags:
             filtered_df = filtered_df[filtered_df['tags'].str.contains(tag, case=False, na=False)]
@@ -408,7 +426,7 @@ async def handle_recommendation(request_data: RecommendRequest):
     if filtered_df.empty:
         return {"sort_by": "relevance", "scores": []}
         
-    # --- BƯỚC 3: LỌC MÓN ĂN (Strict Dish Filter) ---
+    # --- BƯỚC 3: LỌC MÓN ĂN ---
     target_dish_tags = [t for t in extracted_tags if t not in ADJECTIVE_TAGS and t not in PRIORITY_TAGS]
     
     if target_dish_tags:
@@ -421,7 +439,7 @@ async def handle_recommendation(request_data: RecommendRequest):
         if len(matches) > 0:
             filtered_df = filtered_df.loc[matches]
 
-    # --- BƯỚC 4: CHẤM ĐIỂM (Scoring) ---
+    # --- BƯỚC 4: CHẤM ĐIỂM ---
     final_query_text = " ".join(extracted_tags) if extracted_tags else processed_query
     
     try:
@@ -431,30 +449,24 @@ async def handle_recommendation(request_data: RecommendRequest):
     except:
         base_scores = [0.0] * len(filtered_df)
 
-    # --- [UPDATE] LOGIC BOOSTING MỚI ---
+    # --- LOGIC BOOSTING ---
     boosted_scores = []
-    
-    # Chuẩn bị query sạch để so sánh tên
-    # Lấy query đã dịch nhưng chưa tách tag để giữ nguyên tên riêng (như "Hoàng Ty")
     name_query = processed_query.lower().strip() 
 
     for idx, row in enumerate(filtered_df.itertuples()):
         score = base_scores[idx]
         row_name = str(row.name).lower()
         
-        # 1. Dish Boosting (Logic cũ của bạn - giữ nguyên)
         if target_dish_tags:
             for dish in target_dish_tags:
                 if dish in row_name:
                     score += 0.3 
 
-        # 2. [NEW] Name Boosting (Cộng điểm thương hiệu)
-        # Nếu người dùng search "Hoàng Ty", và tên quán chứa "Hoàng Ty" -> Cộng điểm cực lớn
-        if len(name_query) > 2: # Chỉ check nếu query đủ dài (tránh search "a", "b")
+        if len(name_query) > 2:
             if name_query == row_name:
-                score += 10.0 # Trùng khớp hoàn toàn -> Lên Top 1 ngay lập tức
+                score += 10.0
             elif name_query in row_name:
-                score += 5.0  # Chứa tên -> Lên Top
+                score += 5.0
         
         boosted_scores.append(score)
 
@@ -463,7 +475,7 @@ async def handle_recommendation(request_data: RecommendRequest):
 
     final_candidates = filtered_df
 
-    # --- BƯỚC 5: SẮP XẾP (Sorting) ---
+    # --- BƯỚC 5: SẮP XẾP ---
     sort_by = "relevance"
     query_lower = processed_query.lower()
     
@@ -480,14 +492,14 @@ async def handle_recommendation(request_data: RecommendRequest):
         final_candidates = final_candidates.sort_values('S_taste', ascending=False)
         
     scores_list = []
-    for _, row in final_candidates.head(20).iterrows():
+    for _, row in final_candidates.head(64).iterrows():
         scores_list.append({
             "id": str(row['id']),
             "name": str(row['name']),
             "tags": str(row['tags']),
             "S_taste": float(row.get('S_taste', 0.0)),
             "distance_km": float(row.get('distance_km', 999.0)),
-            "price": int(row['price']) if pd.notna(row['price']) and str(row['price']).isdigit() else 0
+            "price": int(row['price'])
         })
         
     return {"sort_by": sort_by, "scores": scores_list}
@@ -499,28 +511,22 @@ async def handle_sentiment(request_data: SentimentRequest):
     res = sentiment_pipeline(request_data.review)[0]
     return {"label": res['label'], "score": res['score']}
 
-# [HÀM MỚI: XỬ LÝ ẢNH VỚI YOLO]
 @app.post("/predict-food")
 async def predict_food(file: UploadFile = File(...)):
     if not yolo_model:
         raise HTTPException(status_code=503, detail="Model AI chưa sẵn sàng")
     
     try:
-        # 1. Đọc ảnh từ file upload
         contents = await file.read()
         image = Image.open(io.BytesIO(contents))
-        
-        # 2. Dự đoán
         results = yolo_model(image)
         
-        # 3. Lấy class có confidence cao nhất
         detected_name = ""
         max_conf = 0.0
         
         if results and len(results) > 0:
             result = results[0]
             if result.boxes:
-                # Sắp xếp box theo confidence và lấy cái tốt nhất
                 top_box = sorted(result.boxes, key=lambda x: x.conf, reverse=True)[0]
                 max_conf = float(top_box.conf)
                 cls_id = int(top_box.cls)
@@ -529,11 +535,9 @@ async def predict_food(file: UploadFile = File(...)):
         if not detected_name:
             return {"food_name": None, "message": "Không nhận diện được món ăn"}
 
-        # 4. Map tên tiếng Anh sang tiếng Việt (dùng từ điển có sẵn)
         name_lower = detected_name.lower().replace("_", " ") 
         translated_name = EN_VI_MAPPING.get(name_lower, name_lower)
 
-        # Fallback: tìm kiếm gần đúng nếu không khớp chính xác
         if translated_name == name_lower: 
              for k, v in EN_VI_MAPPING.items():
                  if name_lower in k:
