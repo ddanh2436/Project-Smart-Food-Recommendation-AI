@@ -103,6 +103,17 @@ EN_VI_MAPPING = {
     'fried roll': 'chả giò', 'egg roll': 'chả giò',
     'steamed roll': 'bánh cuốn', 'dumpling': 'há cảo', 'dimsum': 'dimsum',
     'snack': 'ăn vặt', 'street food': 'vỉa hè',
+    'banh mi': 'bánh mì',
+    'banhmi': 'bánh mì',
+    'banh-mi': 'bánh mì',
+    'pho': 'phở',
+    'bun bo': 'bún bò',
+    'bun bo hue': 'bún bò huế',
+    'com tam': 'cơm tấm',
+    'bun dau mam tom': 'bún đậu mắm tôm',
+    'goi-cuon' : 'gỏi cuốn',
+    'Goi-Cuon' : 'gỏi cuốn',
+    'Bot Chien' : 'bột chiên',
     
     # -- Lẩu & Nướng --
     'hotpot': 'lẩu', 'thai hotpot': 'lẩu thái',
@@ -218,7 +229,7 @@ candidate_tags = [
     'bít tết', 'bò né', 'bò bít tết', 'steak',
     'hải sản', 'ốc', 'tôm', 'cua', 'ghẹ', 'hàu', 'mực', 'bạch tuộc',
     'gà rán', 'gà luộc', 'gà ủ muối', 'vịt quay', 'heo quay', 'phá lấu',
-    'dê', 'cừu', 'ếch', 'lươn',
+    'dê', 'cừu', 'ếch', 'lươn', 'bột chiên',
     
     # -- Bánh & Ăn vặt --
     'bánh mì', 'bánh mì chảo', 'bánh mì xíu mại',
@@ -346,7 +357,7 @@ async def startup_event():
 
     try:
         print("-> Đang tải và khởi tạo YOLOv11m (Medium)...")
-        yolo_model = YOLO("yolo11m.pt")
+        yolo_model = YOLO("best.pt")
         print("-> Load YOLO model thành công!")
     except Exception as e:
         print(f"!!! Lỗi load YOLO: {e}")
@@ -519,6 +530,8 @@ async def predict_food(file: UploadFile = File(...)):
     try:
         contents = await file.read()
         image = Image.open(io.BytesIO(contents))
+        
+        # Chạy model
         results = yolo_model(image)
         
         detected_name = ""
@@ -527,6 +540,7 @@ async def predict_food(file: UploadFile = File(...)):
         if results and len(results) > 0:
             result = results[0]
             if result.boxes:
+                # Lấy box có độ tự tin cao nhất
                 top_box = sorted(result.boxes, key=lambda x: x.conf, reverse=True)[0]
                 max_conf = float(top_box.conf)
                 cls_id = int(top_box.cls)
@@ -535,19 +549,35 @@ async def predict_food(file: UploadFile = File(...)):
         if not detected_name:
             return {"food_name": None, "message": "Không nhận diện được món ăn"}
 
-        name_lower = detected_name.lower().replace("_", " ") 
-        translated_name = EN_VI_MAPPING.get(name_lower, name_lower)
+        # --- LOGIC XỬ LÝ TÊN THÔNG MINH ---
+        # 1. Làm sạch tên gốc: "bun_bo_hue" -> "bun bo hue"
+        name_clean = detected_name.lower().replace("_", " ").replace("-", " ").strip()
+        
+        # 2. Tìm trong từ điển
+        # Ưu tiên 1: Tìm chính xác theo tên đã làm sạch (vd: "bun bo hue")
+        translated_name = EN_VI_MAPPING.get(name_clean)
+        
+        # Ưu tiên 2: Tìm theo tên gốc nếu tên sạch không thấy (vd: "bun-bo-hue")
+        if not translated_name:
+            translated_name = EN_VI_MAPPING.get(detected_name.lower())
+            
+        # Ưu tiên 3: Tìm gần đúng (vd: detected="vietnamese pho" -> map được "pho")
+        if not translated_name:
+            # Mặc định lấy tên sạch nếu không tìm thấy
+            translated_name = name_clean 
+            for k, v in EN_VI_MAPPING.items():
+                # Nếu từ khóa trong từ điển nằm trọn trong tên detected (hoặc ngược lại)
+                if k in name_clean or name_clean in k:
+                    translated_name = v
+                    break
 
-        if translated_name == name_lower: 
-             for k, v in EN_VI_MAPPING.items():
-                 if name_lower in k:
-                     translated_name = v
-                     break
+        # 3. Format kết quả đẹp (Viết Hoa Chữ Cái Đầu)
+        final_name = translated_name.title()
 
-        print(f"AI Detected: {detected_name} -> {translated_name}")
+        print(f"AI Detected: '{detected_name}' -> Clean: '{name_clean}' -> Final: '{final_name}'")
 
         return {
-            "food_name": translated_name, 
+            "food_name": final_name, 
             "original_name": detected_name,
             "confidence": max_conf
         }

@@ -1,0 +1,13 @@
+# Đường dẫn gốc (Root path)
+path: ./datasets  
+
+# Các tập dữ liệu con (tương đối so với path)
+train: train/images
+val: valid/images
+test: test/images  # <-- Thêm dòng này vào nhé!
+
+# Số lượng class
+nc: 5
+
+# Tên các món ăn
+names: ['Banh-Mi', 'Bot Chien', 'Bun', 'Goi-Cuon', 'Pho']
