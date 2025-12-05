@@ -586,5 +586,46 @@ async def predict_food(file: UploadFile = File(...)):
         print(f"Lỗi dự đoán ảnh: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+        # ... (Các phần import và code cũ giữ nguyên)
+
+# [MỚI] Model cho Chatbot
+class ChatRequest(BaseModel):
+    message: str # Tin nhắn người dùng (Vd: "Tìm quán phở ngon")
+    user_gps: Optional[List[float]] = None
+
+class ChatResponse(BaseModel):
+    reply_text: str # Câu trả lời của bot
+    data: List[TasteScore] # Danh sách quán ăn kèm theo
+
+@app.post("/chat", response_model=ChatResponse)
+async def handle_chat(request_data: ChatRequest):
+    # 1. Tận dụng logic recommend có sẵn
+    rec_req = RecommendRequest(
+        query=request_data.message, 
+        user_gps=request_data.user_gps
+    )
+    
+    # Gọi hàm xử lý recommend
+    rec_result = await handle_recommendation(rec_req)
+    
+    # [FIX LỖI TẠI ĐÂY] 
+    # Vì rec_result là dictionary nên phải dùng ngoặc vuông ['scores'] để lấy dữ liệu
+    top_results = rec_result['scores'][:5] 
+    
+    count = len(top_results)
+    
+    # 3. Tạo câu trả lời văn bản
+    reply = ""
+    if count == 0:
+        reply = f"Rất tiếc, mình chưa tìm thấy quán nào phù hợp với yêu cầu '{request_data.message}'. Bạn thử đổi từ khóa khác xem sao nhé (ví dụ: 'phở bò', 'cơm tấm')."
+    else:
+        reply = f"Mình đã tìm được {count} địa điểm phù hợp nhất với yêu cầu '{request_data.message}' của bạn. Mời bạn tham khảo nhé!"
+
+    return {
+        "reply_text": reply,
+        "data": top_results
+    }
+# ... (Phần if __name__ == "__main__": giữ nguyên)
+
 if __name__ == "__main__":
     uvicorn.run("api:app", host="127.0.0.1", port=5000, reload=True)
