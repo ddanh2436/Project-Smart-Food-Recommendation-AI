@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+pandas
+pymongo
+scikit-learn
+transformers
+torch
+ultralytics
+pydantic
+python-multipart
+Pillow
