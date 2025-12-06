@@ -9,3 +9,4 @@ ultralytics
 pydantic
 python-multipart
 Pillow
+opencv-python-headless
