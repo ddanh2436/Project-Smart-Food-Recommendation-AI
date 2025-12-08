@@ -202,6 +202,46 @@ LOCATION_NAMES = {
     'liên chiểu': 'Liên Chiểu', 'lc': 'Liên Chiểu',
     'cẩm lệ': 'Cẩm Lệ', 'cl': 'Cẩm Lệ',
     'hòa vang': 'Hòa Vang', 'hoàng sa': 'Hoàng Sa',
+
+    # --- CẦN THƠ ---
+    'cần thơ': 'Cần Thơ', 'ct': 'Cần Thơ', 'tay do': 'Cần Thơ', 'tây đô': 'Cần Thơ',
+    'ninh kiều': 'Ninh Kiều', 'nk': 'Ninh Kiều',
+    'cái răng': 'Cái Răng', 'cr': 'Cái Răng',
+    'bình thủy': 'Bình Thủy', 'bt': 'Bình Thủy', # Lưu ý: 'bt' có thể trùng Bình Thạnh/Bình Tân ở HCM, cần cân nhắc ngữ cảnh nếu cần
+    'ô môn': 'Ô Môn', 'thốt nốt': 'Thốt Nốt',
+    'phong điền': 'Phong Điền',
+
+    # --- HẢI PHÒNG ---
+    'hải phòng': 'Hải Phòng', 'hp': 'Hải Phòng', 'đất cảng': 'Hải Phòng',
+    'ngô quyền': 'Ngô Quyền', 'lê chân': 'Lê Chân', 'hồng bàng': 'Hồng Bàng',
+    'hải an': 'Hải An', 'kiến an': 'Kiến An', 'đồ sơn': 'Đồ Sơn', 'dương kinh': 'Dương Kinh',
+    'thủy nguyên': 'Thủy Nguyên', 'an dương': 'An Dương', 'an lão': 'An Lão',
+    'cát hải': 'Cát Hải', 'cát bà': 'Cát Bà', # Rất quan trọng cho du lịch
+
+    # --- KHÁNH HÒA (Tập trung Nha Trang) ---
+    'khánh hòa': 'Khánh Hòa', 'kh': 'Khánh Hòa',
+    'nha trang': 'Nha Trang', 'nt': 'Nha Trang',
+    'cam ranh': 'Cam Ranh', 'ninh hòa': 'Ninh Hòa',
+    'vạn ninh': 'Vạn Ninh', 'diên khánh': 'Diên Khánh', 'cam lâm': 'Cam Lâm',
+
+    # --- BÀ RỊA - VŨNG TÀU ---
+    'bà rịa vũng tàu': 'Vũng Tàu', 'brvt': 'Vũng Tàu',
+    'vũng tàu': 'Vũng Tàu', 'vt': 'Vũng Tàu',
+    'bà rịa': 'Bà Rịa',
+    'phú mỹ': 'Phú Mỹ', 'châu đức': 'Châu Đức', 'xuyên mộc': 'Xuyên Mộc',
+    'long điền': 'Long Điền', 'đất đỏ': 'Đất Đỏ', 'côn đảo': 'Côn Đảo',
+
+    # --- LÂM ĐỒNG (Tập trung Đà Lạt) ---
+    'lâm đồng': 'Lâm Đồng', 'ld': 'Lâm Đồng',
+    'đà lạt': 'Đà Lạt', 'dl': 'Đà Lạt', 
+    'thành phố ngàn hoa': 'Đà Lạt', 'xứ sở sương mù': 'Đà Lạt', # Thêm biệt danh để AI thông minh hơn
+    'bảo lộc': 'Bảo Lộc', 'bl': 'Bảo Lộc',
+    'đức trọng': 'Đức Trọng', # Nơi có sân bay Liên Khương
+    'di linh': 'Di Linh',
+    'lạc dương': 'Lạc Dương', # Nơi có Langbiang
+    'đơn dương': 'Đơn Dương', 
+    'lâm hà': 'Lâm Hà',
+
 }
 
 # [DANH SÁCH THÀNH PHỐ LỚN] - Dùng để lọc rộng hơn
