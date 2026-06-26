@@ -16,7 +16,7 @@ from PIL import Image
 from ultralytics import YOLO
 
 # --- CẤU HÌNH ---
-MONGO_URI = "mongodb+srv://quockhanh:quockhanh1234@vietnomnom.sxnsf4y.mongodb.net/?retryWrites=true&w=majority&appName=VietNomNom" 
+MONGO_URI = "//" 
 DB_NAME = "VietNomNom"      
 COLLECTION_NAME = "restaurants"
 
