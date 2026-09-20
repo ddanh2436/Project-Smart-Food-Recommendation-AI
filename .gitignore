@@ -1,0 +1,38 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.Python
+
+# --- Virtual envs ---
+venv/
+.venv/
+env/
+
+# --- Secrets ---
+.env
+.env.local
+.env.*.local
+
+# --- Training data (re-downloadable from Roboflow; see data.yaml) ---
+datasets/
+
+# --- Base pretrained weights (auto-downloaded by ultralytics on demand) ---
+yolo11m.pt
+yolo*.pt
+!best.pt
+
+# --- YOLO training artifacts ---
+runs/
+*.cache
+
+# --- Caches ---
+.cache/
+.pytest_cache/
+.ruff_cache/
+embeddings_cache.npz
+
+# --- OS / editors ---
+.DS_Store
+.vscode/
+.idea/
