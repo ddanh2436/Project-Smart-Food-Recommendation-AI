@@ -1,12 +1,39 @@
-fastapi
-uvicorn
-pandas
-pymongo
-scikit-learn
-transformers
-torch
-ultralytics
-pydantic
-python-multipart
-Pillow
-opencv-python-headless
+# VietNomNom AI service — all dependencies are free and run locally.
+#
+# Versions are pinned with a compatible-release bound so a Hugging Face Space
+# rebuild cannot silently pull a breaking major version. The original file was
+# entirely unpinned, which is why a rebuild could change behaviour on its own.
+
+# --- Web framework ---
+fastapi~=0.115.0
+uvicorn[standard]~=0.32.0
+pydantic~=2.9.0
+python-multipart~=0.0.12
+python-dotenv~=1.0.1
+
+# --- Data & classic ML ---
+pandas~=2.2.0
+numpy~=1.26.4
+scikit-learn~=1.5.0
+pymongo~=4.10.0
+
+# --- Deep learning ---
+# CPU-only torch keeps the image small enough for a free Space. If you deploy
+# somewhere with a GPU, drop the --extra-index-url line and let pip pick the
+# CUDA build instead.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch~=2.5.0
+
+# --- Vietnamese sentiment (5CD-AI/Vietnamese-Sentiment-visobert) ---
+transformers~=4.46.0
+
+# --- Multilingual semantic search ---
+# Optional at runtime: if this import fails the service logs a warning and
+# falls back to TF-IDF only. Set ENABLE_SEMANTIC_SEARCH=false to skip it and
+# save roughly 500MB of RAM on a small Space.
+sentence-transformers~=3.2.0
+
+# --- Food photo recognition (best.pt) ---
+ultralytics~=8.3.0
+Pillow~=11.0.0
+opencv-python-headless~=4.10.0

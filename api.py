@@ -1,671 +1,425 @@
-# ai-service/api.py
-import pandas as pd
-from pymongo import MongoClient
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-from transformers import pipeline
-import uvicorn
-from fastapi import FastAPI, HTTPException, File, UploadFile
+# -*- coding: utf-8 -*-
+"""VietNomNom AI service.
+
+FastAPI app exposing recommendation, chat, sentiment, review-insight and
+food-photo endpoints. Every model it uses is free and runs locally — there is
+no paid API dependency.
+
+Response shapes for /recommend, /sentiment and /predict-food stay backwards
+compatible with the existing NestJS backend; new fields are additive.
+
+Run locally:      python api.py
+Run in prod:      uvicorn api:app --host 0.0.0.0 --port $PORT
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from contextlib import asynccontextmanager
+from typing import Any, Literal
+
+from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List, Optional
-import math
-import os
-import io
-from PIL import Image
-from ultralytics import YOLO
+from fastapi.middleware.gzip import GZipMiddleware
+from pydantic import BaseModel, Field, field_validator
 
-# --- CẤU HÌNH ---
-MONGO_URI = "//" 
-DB_NAME = "VietNomNom"      
-COLLECTION_NAME = "restaurants"
+import chat as chat_engine
+import review_insights
+from config import settings
+from data_store import store
+from intent import parse_intent
+from search import row_to_payload, search
+from sentiment import analyzer
+from vision import detector, title_case
 
-# --- MODELS ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+)
+logger = logging.getLogger("vietnomnom.ai")
+
+SERVICE_VERSION = "2.0.0"
+
+
+# ==========================================================================
+# Schemas
+# ==========================================================================
 class RecommendRequest(BaseModel):
-    query: str 
-    candidate_ids: Optional[List[str]] = [] 
-    user_gps: Optional[List[float]] = None
-    city_filter: Optional[str] = None
+    query: str = Field(default="", max_length=500)
+    candidate_ids: list[str] | None = Field(default=None, max_length=5000)
+    user_gps: list[float] | None = None
+    city_filter: str | None = Field(default=None, max_length=100)
+    limit: int = Field(default=64, ge=1, le=200)
+
+    @field_validator("user_gps")
+    @classmethod
+    def _check_gps(cls, value: list[float] | None) -> list[float] | None:
+        """Reject a malformed GPS pair instead of silently mis-ranking.
+
+        The old code indexed ``user_gps[0]`` after only checking the length,
+        so a payload like ``["abc", 1]`` raised deep inside the ranker.
+        """
+        if value is None:
+            return None
+        if len(value) != 2:
+            raise ValueError("user_gps must be [latitude, longitude]")
+        latitude, longitude = value
+        if not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180):
+            raise ValueError("user_gps out of range")
+        return [float(latitude), float(longitude)]
+
 
 class TasteScore(BaseModel):
-    id: str             
-    name: str 
-    tags: str  
+    """One ranked restaurant. The first six fields are the original contract."""
+
+    id: str
+    name: str
+    tags: str
     S_taste: float
     distance_km: float
     price: int
+    # Additive fields, safe for older clients to ignore.
+    address: str = ""
+    district: str = ""
+    city: str = ""
+    rating: float = 0.0
+    image_url: str = ""
+    source_url: str = ""
+    opening_hours: str = ""
+    price_text: str = ""
+
 
 class RecommendResponse(BaseModel):
-    sort_by: str 
-    scores: List[TasteScore] 
+    sort_by: str
+    scores: list[TasteScore]
+    total_matches: int = 0
+    intent: dict[str, Any] | None = None
+    relaxed_filters: list[str] = Field(default_factory=list)
+
 
 class SentimentRequest(BaseModel):
-    review: str
+    review: str = Field(..., max_length=5000)
+
 
 class SentimentResponse(BaseModel):
     label: str
     score: float
+    available: bool = True
 
-# --- LOGIC APP ---
-print("--- KHỞI ĐỘNG SERVER AI (FINAL PRODUCTION - FIX HANOI SEARCH) ---")
-app = FastAPI()
 
-app.add_middleware(
-    CORSMiddleware, 
-    allow_origins=["*"], 
-    allow_methods=["*"], 
-    allow_headers=["*"]
-)
+class SentimentBatchRequest(BaseModel):
+    reviews: list[str] = Field(..., min_length=1, max_length=256)
 
-# --- GLOBAL VARIABLES ---
-df = None
-tfidf_vectorizer = None
-sentiment_pipeline = None
-yolo_model = None
 
-# --- CONSTANTS ---
-TAG_KNOWLEDGE_BASE = {
-    # Về không gian/nhu cầu
-    'lãng mạn': 'hẹn hò', 'sang chảnh': 'sang trọng', 'đắt tiền': 'sang trọng', 'luxury': 'sang trọng',
-    'thoải mái': 'yên tĩnh', 'nhanh gọn': 'nhanh', 'tụ tập': 'nhậu', 'nhậu nhẹt': 'nhậu',
-    'bình dân': 'rẻ', 'hạt dẻ': 'rẻ', 'sinh viên': 'rẻ',
-    'mát mẻ': 'máy lạnh', 'điều hòa': 'máy lạnh',
-    'view đẹp': 'đẹp', 'sống ảo': 'đẹp',
-    
-    # Về món ăn (Vùng miền)
-    'đồng quê': 'cơm việt', 'cơm bắc': 'cơm việt', 'cơm niêu': 'cơm việt',
-    'đặc sản huế': 'bún bò huế', 'món huế': 'bún bò huế',
-    'đặc sản hà nội': 'bún chả', 'phở bắc': 'phở',
-    'đặc sản sài gòn': 'cơm tấm', 
-    'đồ nướng': 'nướng', 'bbq': 'nướng',
-    'hải sản tươi sống': 'hải sản'
-}
+class SentimentBatchResponse(BaseModel):
+    results: list[SentimentResponse]
 
-EN_VI_MAPPING = {
-    # -- Món nước --
-    'beef noodle': 'bún bò', 'beef noodle soup': 'bún bò', 'bun bo': 'bún bò',
-    'pho': 'phở', 'noodle soup': 'phở', 'chicken noodle': 'phở gà',
-    'crab noodle': 'bún riêu', 'snail noodle': 'bún ốc',
-    'fish noodle': 'bún cá',
-    'hu tieu': 'hủ tiếu', 'vermicelli': 'bún', 'glass noodle': 'miến',
-    'ramen': 'mì nhật', 'udon': 'mì udon',
-    
-    # -- Cơm & Món mặn --
-    'broken rice': 'cơm tấm', 'com tam': 'cơm tấm', 'pork chop rice': 'cơm sườn',
-    'chicken rice': 'cơm gà', 'fried rice': 'cơm chiên',
-    'rice': 'cơm', 'sticky rice': 'xôi',
-    'braised pork': 'thịt kho', 'catfish': 'cá kho',
-    
-    # -- Bánh & Ăn vặt --
-    'bread': 'bánh mì', 'baguette': 'bánh mì', 'sandwich': 'bánh mì',
-    'pancake': 'bánh xèo', 'sizzling cake': 'bánh xèo',
-    'spring roll': 'gỏi cuốn', 'summer roll': 'gỏi cuốn', 'fresh roll': 'gỏi cuốn',
-    'fried roll': 'chả giò', 'egg roll': 'chả giò',
-    'steamed roll': 'bánh cuốn', 'dumpling': 'há cảo', 'dimsum': 'dimsum',
-    'snack': 'ăn vặt', 'street food': 'vỉa hè',
-    'banh mi': 'bánh mì',
-    'banhmi': 'bánh mì',
-    'banh-mi': 'bánh mì',
-    'pho': 'phở',
-    'bun bo': 'bún bò',
-    'bun bo hue': 'bún bò huế',
-    'com tam': 'cơm tấm',
-    'bun dau mam tom': 'bún đậu mắm tôm',
-    'goi-cuon' : 'gỏi cuốn',
-    'Goi-Cuon' : 'gỏi cuốn',
-    'Bot Chien' : 'bột chiên',
-    
-    # -- Lẩu & Nướng --
-    'hotpot': 'lẩu', 'thai hotpot': 'lẩu thái',
-    'bbq': 'nướng', 'grilled': 'nướng', 'steak': 'bít tết', 'beefsteak': 'bít tết',
-    
-    # -- Nguyên liệu --
-    'seafood': 'hải sản', 'fish': 'cá', 'crab': 'cua', 'shrimp': 'tôm', 
-    'snail': 'ốc', 'clam': 'nghêu', 'oyster': 'hàu',
-    'beef': 'bò', 'chicken': 'gà', 'pork': 'heo', 'duck': 'vịt', 'goat': 'dê',
-    'vegetarian': 'chay', 'vegan': 'chay', 'tofu': 'đậu hũ',
-    
-    # -- Đồ uống & Tráng miệng --
-    'coffee': 'cà phê', 'milk coffee': 'cà phê sữa', 'egg coffee': 'cà phê trứng',
-    'tea': 'trà', 'milk tea': 'trà sữa', 'bubble tea': 'trà sữa',
-    'juice': 'nước ép', 'smoothie': 'sinh tố', 'beer': 'bia',
-    'dessert': 'tráng miệng', 'sweet soup': 'chè', 'ice cream': 'kem', 'cake': 'bánh ngọt',
-    
-    # -- Tính chất --
-    'delicious': 'ngon', 'yummy': 'ngon', 'tasty': 'ngon', 'good': 'ngon', 'best': 'ngon nhất',
-    'cheap': 'rẻ', 'budget': 'rẻ', 'reasonable': 'rẻ', 'affordable': 'rẻ',
-    'expensive': 'sang trọng', 'luxury': 'sang trọng', 'fine dining': 'sang trọng',
-    'near': 'gần', 'nearby': 'gần', 'closest': 'gần',
-    'spicy': 'cay', 'hot': 'cay',
-    'nice view': 'đẹp', 'air conditioner': 'máy lạnh', 'ac': 'máy lạnh',
-    
-    # -- Thời gian & Địa điểm --
-    'late night': 'ăn đêm', 'night': 'đêm', 'midnight': 'đêm',
-    'morning': 'sáng', 'breakfast': 'sáng',
-    'lunch': 'trưa', 'noon': 'trưa',
-    'dinner': 'tối',
-    'district': 'quận', 'city': 'thành phố', 'hcmc': 'tphcm', 'saigon': 'sài gòn'
-}
 
-LOCATION_NAMES = {
-    # --- TP. HỒ CHÍ MINH ---
-    'quận 1': 'Quận 1', 'q1': 'Quận 1', 
-    'quận 2': 'Quận 2', 'q2': 'Quận 2',
-    'quận 3': 'Quận 3', 'q3': 'Quận 3', 
-    'quận 4': 'Quận 4', 'q4': 'Quận 4',
-    'quận 5': 'Quận 5', 'q5': 'Quận 5', 
-    'quận 6': 'Quận 6', 'q6': 'Quận 6',
-    'quận 7': 'Quận 7', 'q7': 'Quận 7', 
-    'quận 8': 'Quận 8', 'q8': 'Quận 8',
-    'quận 9': 'Quận 9', 'q9': 'Quận 9', 
-    'quận 10': 'Quận 10', 'q10': 'Quận 10',
-    'quận 11': 'Quận 11', 'q11': 'Quận 11', 
-    'quận 12': 'Quận 12', 'q12': 'Quận 12',
-    'bình thạnh': 'Bình Thạnh', 'bt': 'Bình Thạnh',
-    'phú nhuận': 'Phú Nhuận', 'pn': 'Phú Nhuận',
-    'gò vấp': 'Gò Vấp', 'gv': 'Gò Vấp',
-    'tân bình': 'Tân Bình', 'tb': 'Tân Bình',
-    'tân phú': 'Tân Phú', 'tp': 'Tân Phú',
-    'bình tân': 'Bình Tân', 
-    'thủ đức': 'Thủ Đức', 'tđ': 'Thủ Đức',
-    'sài gòn': 'TPHCM', 'hcm': 'TPHCM', 'tphcm': 'TPHCM',
-    'bình chánh': 'Bình Chánh', 'hóc môn': 'Hóc Môn', 
-    'củ chi': 'Củ Chi', 'nhà bè': 'Nhà Bè', 'cần giờ': 'Cần Giờ',
+class ReviewItem(BaseModel):
+    noiDung: str = Field(default="", max_length=5000)
+    diemReview: float | None = None
 
-    # --- HÀ NỘI ---
-    'hà nội': 'Hà Nội', 'hn': 'Hà Nội', 'thủ đô': 'Hà Nội',
-    'ba đình': 'Ba Đình', 'bđ': 'Ba Đình',
-    'hoàn kiếm': 'Hoàn Kiếm', 'hk': 'Hoàn Kiếm',
-    'tây hồ': 'Tây Hồ', 
-    'long biên': 'Long Biên', 'lb': 'Long Biên',
-    'cầu giấy': 'Cầu Giấy', 'cg': 'Cầu Giấy',
-    'đống đa': 'Đống Đa', 'đđ': 'Đống Đa',
-    'hai bà trưng': 'Hai Bà Trưng', 'hbt': 'Hai Bà Trưng',
-    'hoàng mai': 'Hoàng Mai', 'hm': 'Hoàng Mai',
-    'thanh xuân': 'Thanh Xuân', 'tx': 'Thanh Xuân',
-    'sóc sơn': 'Sóc Sơn', 'đông anh': 'Đông Anh', 'gia lâm': 'Gia Lâm',
-    'nam từ liêm': 'Nam Từ Liêm', 'ntl': 'Nam Từ Liêm',
-    'bắc từ liêm': 'Bắc Từ Liêm', 'btl': 'Bắc Từ Liêm',
-    'hà đông': 'Hà Đông', 'hđ': 'Hà Đông',
-    'sơn tây': 'Sơn Tây', 'ba vì': 'Ba Vì', 'phúc thọ': 'Phúc Thọ',
-    'đan phượng': 'Đan Phượng', 'hoài đức': 'Hoài Đức', 'quốc oai': 'Quốc Oai',
-    'thạch thất': 'Thạch Thất', 'chương mỹ': 'Chương Mỹ', 'thanh oai': 'Thanh Oai',
-    'thường tín': 'Thường Tín', 'phú xuyên': 'Phú Xuyên', 'ứng hòa': 'Ứng Hòa',
-    'mỹ đức': 'Mỹ Đức', 'mê linh': 'Mê Linh', 'thanh trì': 'Thanh Trì',
 
-    # --- ĐÀ NẴNG ---
-    'đà nẵng': 'Đà Nẵng', 'đn': 'Đà Nẵng', 'dn': 'Đà Nẵng',
-    'hải châu': 'Hải Châu', 'hc': 'Hải Châu',
-    'thanh khê': 'Thanh Khê', 'tk': 'Thanh Khê',
-    'sơn trà': 'Sơn Trà', 'st': 'Sơn Trà',
-    'ngũ hành sơn': 'Ngũ Hành Sơn', 'nhs': 'Ngũ Hành Sơn',
-    'liên chiểu': 'Liên Chiểu', 'lc': 'Liên Chiểu',
-    'cẩm lệ': 'Cẩm Lệ', 'cl': 'Cẩm Lệ',
-    'hòa vang': 'Hòa Vang', 'hoàng sa': 'Hoàng Sa',
+class ReviewInsightRequest(BaseModel):
+    reviews: list[ReviewItem] = Field(default_factory=list, max_length=500)
+    lang: Literal["vi", "en"] = "vi"
 
-    # --- CẦN THƠ ---
-    'cần thơ': 'Cần Thơ', 'ct': 'Cần Thơ', 'tay do': 'Cần Thơ', 'tây đô': 'Cần Thơ',
-    'ninh kiều': 'Ninh Kiều', 'nk': 'Ninh Kiều',
-    'cái răng': 'Cái Răng', 'cr': 'Cái Răng',
-    'bình thủy': 'Bình Thủy', 'bt': 'Bình Thủy', # Lưu ý: 'bt' có thể trùng Bình Thạnh/Bình Tân ở HCM, cần cân nhắc ngữ cảnh nếu cần
-    'ô môn': 'Ô Môn', 'thốt nốt': 'Thốt Nốt',
-    'phong điền': 'Phong Điền',
 
-    # --- HẢI PHÒNG ---
-    'hải phòng': 'Hải Phòng', 'hp': 'Hải Phòng', 'đất cảng': 'Hải Phòng',
-    'ngô quyền': 'Ngô Quyền', 'lê chân': 'Lê Chân', 'hồng bàng': 'Hồng Bàng',
-    'hải an': 'Hải An', 'kiến an': 'Kiến An', 'đồ sơn': 'Đồ Sơn', 'dương kinh': 'Dương Kinh',
-    'thủy nguyên': 'Thủy Nguyên', 'an dương': 'An Dương', 'an lão': 'An Lão',
-    'cát hải': 'Cát Hải', 'cát bà': 'Cát Bà', # Rất quan trọng cho du lịch
+class ChatMessage(BaseModel):
+    role: Literal["user", "bot"]
+    text: str = Field(default="", max_length=1000)
 
-    # --- KHÁNH HÒA (Tập trung Nha Trang) ---
-    'khánh hòa': 'Khánh Hòa', 'kh': 'Khánh Hòa',
-    'nha trang': 'Nha Trang', 'nt': 'Nha Trang',
-    'cam ranh': 'Cam Ranh', 'ninh hòa': 'Ninh Hòa',
-    'vạn ninh': 'Vạn Ninh', 'diên khánh': 'Diên Khánh', 'cam lâm': 'Cam Lâm',
 
-    # --- BÀ RỊA - VŨNG TÀU ---
-    'bà rịa vũng tàu': 'Vũng Tàu', 'brvt': 'Vũng Tàu',
-    'vũng tàu': 'Vũng Tàu', 'vt': 'Vũng Tàu',
-    'bà rịa': 'Bà Rịa',
-    'phú mỹ': 'Phú Mỹ', 'châu đức': 'Châu Đức', 'xuyên mộc': 'Xuyên Mộc',
-    'long điền': 'Long Điền', 'đất đỏ': 'Đất Đỏ', 'côn đảo': 'Côn Đảo',
-
-    # --- LÂM ĐỒNG (Tập trung Đà Lạt) ---
-    'lâm đồng': 'Lâm Đồng', 'ld': 'Lâm Đồng',
-    'đà lạt': 'Đà Lạt', 'dl': 'Đà Lạt', 
-    'thành phố ngàn hoa': 'Đà Lạt', 'xứ sở sương mù': 'Đà Lạt', # Thêm biệt danh để AI thông minh hơn
-    'bảo lộc': 'Bảo Lộc', 'bl': 'Bảo Lộc',
-    'đức trọng': 'Đức Trọng', # Nơi có sân bay Liên Khương
-    'di linh': 'Di Linh',
-    'lạc dương': 'Lạc Dương', # Nơi có Langbiang
-    'đơn dương': 'Đơn Dương', 
-    'lâm hà': 'Lâm Hà',
-
-}
-
-# [DANH SÁCH THÀNH PHỐ LỚN] - Dùng để lọc rộng hơn
-MAJOR_CITIES = ['Hà Nội', 'TPHCM', 'Đà Nẵng']
-
-candidate_tags = [
-    # -- Món Nước --
-    'bún bò', 'bún bò huế', 'bún riêu', 'bún mắm', 'bún chả', 'bún thịt nướng', 'bún đậu', 
-    'bún cá', 'bún mọc', 'bún thái', 'bún ốc', 'bún',
-    'phở', 'phở bò', 'phở gà', 'phở cuốn',
-    'hủ tiếu', 'hủ tiếu nam vang', 'hủ tiếu gõ', 'hủ tiếu mực',
-    'bánh canh', 'bánh canh cua', 'bánh canh ghẹ', 'bánh canh cá lóc',
-    'mì', 'mì quảng', 'mì vịt tiềm', 'mì ý', 'mì cay', 'mì xào', 'mì trộn', 'ramen', 'udon',
-    'miến', 'miến gà', 'miến lươn', 'miến xào',
-    'nui', 'nui xào', 'bò kho', 'lagu', 'cà ri', 'cháo', 'cháo lòng', 'cháo ếch', 'súp',
-
-    # -- Cơm --
-    'cơm tấm', 'cơm sườn', 'cơm gà', 'cơm gà xối mỡ', 'cơm niêu', 'cơm văn phòng', 
-    'cơm chiên', 'cơm rang', 'cơm lam', 'cơm phần', 'cơm',
-    'xôi', 'xôi gà', 'xôi mặn',
-    
-    # -- Món Mặn / Nhậu --
-    'lẩu', 'lẩu thái', 'lẩu bò', 'lẩu gà', 'lẩu dê', 'lẩu hải sản', 'lẩu mắm', 'lẩu cá',
-    'nướng', 'bbq', 'bò nướng', 'gà nướng', 'hải sản nướng', 'nem nướng',
-    'bít tết', 'bò né', 'bò bít tết', 'steak',
-    'hải sản', 'ốc', 'tôm', 'cua', 'ghẹ', 'hàu', 'mực', 'bạch tuộc',
-    'gà rán', 'gà luộc', 'gà ủ muối', 'vịt quay', 'heo quay', 'phá lấu',
-    'dê', 'cừu', 'ếch', 'lươn', 'bột chiên',
-    
-    # -- Bánh & Ăn vặt --
-    'bánh mì', 'bánh mì chảo', 'bánh mì xíu mại',
-    'bánh xèo', 'bánh khọt', 'bánh cuốn', 'bánh ướt', 'bánh bèo', 'bánh bột lọc', 'bánh nậm',
-    'gỏi cuốn', 'bì cuốn', 'chả giò', 'nem rán',
-    'pizza', 'hamburger', 'sushi', 'sashimi', 'dimsum', 'há cảo', 'xíu mại',
-    'ăn vặt', 'bánh tráng trộn', 'cá viên chiên', 'xiên que', 'bắp xào', 'hột vịt lộn',
-    
-    # -- Đồ uống & Tráng miệng --
-    'cà phê', 'cà phê sữa', 'cà phê trứng', 'cà phê vợt',
-    'trà sữa', 'trà đào', 'trà chanh', 'trà',
-    'sinh tố', 'nước ép', 'chè', 'kem', 'bingsu', 'tàu hũ', 'sữa chua', 'bánh ngọt',
-    'bia', 'bia thủ công', 'rượu', 'pub', 'bar',
-    
-    # -- Phong cách / Quốc gia --
-    'chay', 'thuần chay', 'healthy', 'eat clean',
-    'hàn quốc', 'nhật bản', 'trung hoa', 'thái lan', 'âu', 'mỹ', 'ý',
-    'vỉa hè', 'sang trọng', 'bình dân', 'gia đình', 'hẹn hò', 'nhậu', 'view đẹp',
-    'máy lạnh', 'sân vườn', 'yên tĩnh', 'nhanh', 'mang đi', 'buffet',
-    
-    # -- Thời gian --
-    'sáng', 'trưa', 'chiều', 'tối', 'đêm', 'ăn đêm', '24h'
-]
-
-PRIORITY_TAGS = ['đêm', 'sáng', 'trưa', 'chiều', 'tối', 'ăn đêm']
-ADJECTIVE_TAGS = ['rẻ', 'gần', 'ngon', 'tốt', 'nhanh', 'đẹp', 'vỉa hè', 'sang trọng', 'yên tĩnh', 'nổi tiếng', 'nhất']
-
-# --- HELPER FUNCTIONS ---
-def clean_coordinate(val):
-    try:
-        if isinstance(val, (int, float)): return float(val)
-        if isinstance(val, str): return float(val.replace(',', '.'))
-        return 0.0
-    except: return 0.0
-
-def clean_price(val):
-    try:
-        s = str(val)
-        clean_s = ''.join(filter(str.isdigit, s))
-        if clean_s:
-            return float(clean_s)
-        return 0.0
-    except:
-        return 0.0
-
-# [FIX] Sửa lại hàm trích xuất địa chỉ: Bỏ điều kiện 'quận' và ưu tiên chuỗi dài nhất
-def extract_district_from_address(address):
-    if not isinstance(address, str): return ''
-    addr_lower = address.lower()
-    
-    # Sắp xếp keys theo độ dài giảm dần để ưu tiên từ khóa dài
-    # VD: Nếu địa chỉ là "Quận 12", nó sẽ khớp "Quận 12" trước thay vì "Quận 1"
-    sorted_locations = sorted(LOCATION_NAMES.keys(), key=len, reverse=True)
-    
-    for k in sorted_locations:
-        # Chỉ cần tên địa danh nằm trong địa chỉ là lấy (Bỏ điều kiện 'quận' in k)
-        if k in addr_lower:
-            return LOCATION_NAMES[k]
-            
-    return ''
-
-def translate_query(query):
-    query_lower = query.lower()
-    for k, v in EN_VI_MAPPING.items():
-        if f" {k} " in f" {query_lower} ":
-            query_lower = query_lower.replace(k, v)
-    return query_lower
-
-def calculate_distance(lat1, lon1, lat2, lon2):
-    if any(x is None for x in [lat1, lon1, lat2, lon2]): return 999.0
-    try:
-        lat1, lon1, lat2, lon2 = map(float, [lat1, lon1, lat2, lon2])
-        R = 6371 
-        dLat = math.radians(lat2 - lat1)
-        dLon = math.radians(lon2 - lon1)
-        a = math.sin(dLat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dLon/2)**2
-        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-        return R * c
-    except: return 999.0
-
-# --- STARTUP ---
-@app.on_event("startup")
-async def startup_event():
-    global df, tfidf_vectorizer, sentiment_pipeline, yolo_model
-    print("-> Đang load dữ liệu...")
-    try:
-        client = MongoClient(MONGO_URI)
-        collection = client[DB_NAME][COLLECTION_NAME]
-        data_list = list(collection.find({}))
-        
-        if not data_list:
-            df = pd.DataFrame(columns=['id', 'name', 'tags', 'rating', 'price', 'lat', 'lon', 'district'])
-        else:
-            temp_df = pd.DataFrame(data_list)
-            temp_df['id'] = temp_df['_id'].astype(str)
-            rename_map = {'tenQuan': 'name', 'diemTrungBinh': 'rating', 'giaCa': 'price', 'diaChi': 'address'}
-            temp_df.rename(columns=rename_map, inplace=True)
-            
-            temp_df['tags'] = temp_df['tags'].apply(lambda x: " ".join(x) if isinstance(x, list) else str(x)).fillna('')
-            
-            if 'lat' in temp_df.columns: temp_df['lat'] = temp_df['lat'].apply(clean_coordinate)
-            else: temp_df['lat'] = 0.0
-            if 'lon' in temp_df.columns: temp_df['lon'] = temp_df['lon'].apply(clean_coordinate)
-            else: temp_df['lon'] = 0.0
-            
-            if 'price' not in temp_df.columns:
-                temp_df['price'] = 0.0
-            else:
-                temp_df['price'] = temp_df['price'].apply(clean_price)
-                
-            temp_df['district'] = temp_df['address'].apply(extract_district_from_address)
-            
-            df = temp_df
-            tfidf_vectorizer = TfidfVectorizer()
-            tag_matrix = tfidf_vectorizer.fit_transform(df['tags'])
-            print(f"-> Load thành công {len(df)} quán ăn.")
-            
-    except Exception as e:
-        print(f"!!! Lỗi Critical khi load DB: {e}")
-        df = pd.DataFrame()
-
-    try:
-        sentiment_pipeline = pipeline("sentiment-analysis", model="5CD-AI/Vietnamese-Sentiment-visobert")
-    except: pass
-
-    try:
-        print("-> Đang tải và khởi tạo YOLOv11m (Medium)...")
-        yolo_model = YOLO("best.pt")
-        print("-> Load YOLO model thành công!")
-    except Exception as e:
-        print(f"!!! Lỗi load YOLO: {e}")
-        yolo_model = None
-
-@app.get("/")
-async def root():
-    status = "Active" if df is not None and not df.empty else "Empty Data"
-    return {"status": "AI Service Running", "data_status": status}
-
-@app.post("/recommend", response_model=RecommendResponse)
-async def handle_recommendation(request_data: RecommendRequest):
-    if df is None or df.empty:
-        raise HTTPException(status_code=503, detail="Database chưa sẵn sàng")
-    
-    # 1. PRE-PROCESS
-    original_query = request_data.query
-    processed_query = translate_query(original_query)
-    user_gps = request_data.user_gps
-    
-    current_df = df.copy()
-    
-    if user_gps and len(user_gps) == 2:
-        current_df['distance_km'] = current_df.apply(lambda row: calculate_distance(user_gps[0], user_gps[1], row['lat'], row['lon']), axis=1)
-    else:
-        current_df['distance_km'] = 999.0
-        
-    temp_query = " " + processed_query.lower() + " "
-    
-    for k, v in TAG_KNOWLEDGE_BASE.items():
-        if f" {k} " in temp_query: temp_query = temp_query.replace(f" {k} ", f" {v} ")
-
-    locations_to_filter = []
-    for k, v in LOCATION_NAMES.items():
-        if f" {k} " in temp_query:
-            locations_to_filter.append(v)
-            temp_query = temp_query.replace(f" {k} ", " ")
-    
-    extracted_tags = []
-    sorted_candidates = sorted(candidate_tags, key=len, reverse=True)
-    for tag in sorted_candidates:
-        if f" {tag} " in temp_query:
-            extracted_tags.append(tag)
-            temp_query = temp_query.replace(f" {tag} ", " ")
-            
-    mandatory_tags = [t for t in extracted_tags if t in PRIORITY_TAGS]
-    
-    # --- BƯỚC 1: LỌC CƠ BẢN (Location, GPS) ---
-    filtered_df = current_df
-    
-    if locations_to_filter:
-        # [FIX] Logic thông minh hơn cho việc lọc địa điểm
-        # Tách ra: Đâu là Tên thành phố, đâu là tên Quận huyện
-        city_filters = [loc for loc in locations_to_filter if loc in MAJOR_CITIES]
-        district_filters = [loc for loc in locations_to_filter if loc not in MAJOR_CITIES]
-
-        if city_filters:
-            # Nếu user tìm "Hà Nội" -> Tìm trong toàn bộ địa chỉ (vì quận Ba Đình cũng thuộc HN)
-            pattern = '|'.join(city_filters)
-            filtered_df = filtered_df[filtered_df['address'].str.contains(pattern, case=False, na=False)]
-        
-        if district_filters:
-             # Nếu user tìm "Ba Đình" -> Tìm chính xác trong cột district đã extract
-             filtered_df = filtered_df[filtered_df['district'].isin(district_filters)]
-
-    elif request_data.city_filter:
-        filtered_df = filtered_df[filtered_df['district'].str.contains(request_data.city_filter, case=False, na=False)]
-    else:
-        if user_gps and len(user_gps) == 2:
-            filtered_df = filtered_df[filtered_df['distance_km'] <= 20.0]
-            
-    # --- BƯỚC 2: LỌC THỜI GIAN ---
-    if mandatory_tags:
-        for tag in mandatory_tags:
-            filtered_df = filtered_df[filtered_df['tags'].str.contains(tag, case=False, na=False)]
-            
-    if filtered_df.empty:
-        return {"sort_by": "relevance", "scores": []}
-        
-    # --- BƯỚC 3: LỌC MÓN ĂN ---
-    target_dish_tags = [t for t in extracted_tags if t not in ADJECTIVE_TAGS and t not in PRIORITY_TAGS]
-    
-    if target_dish_tags:
-        matches = []
-        for index, row in filtered_df.iterrows():
-            row_tags = str(row['tags']).lower()
-            if any(dish in row_tags for dish in target_dish_tags):
-                matches.append(index)
-        
-        if len(matches) > 0:
-            filtered_df = filtered_df.loc[matches]
-
-    # --- BƯỚC 4: CHẤM ĐIỂM ---
-    final_query_text = " ".join(extracted_tags) if extracted_tags else processed_query
-    
-    try:
-        qv = tfidf_vectorizer.transform([final_query_text])
-        tm = tfidf_vectorizer.transform(filtered_df['tags'])
-        base_scores = cosine_similarity(qv, tm).flatten()
-    except:
-        base_scores = [0.0] * len(filtered_df)
-
-    # --- LOGIC BOOSTING ---
-    boosted_scores = []
-    name_query = processed_query.lower().strip() 
-
-    for idx, row in enumerate(filtered_df.itertuples()):
-        score = base_scores[idx]
-        row_name = str(row.name).lower()
-        
-        if target_dish_tags:
-            for dish in target_dish_tags:
-                if dish in row_name:
-                    score += 0.3 
-
-        if len(name_query) > 2:
-            if name_query == row_name:
-                score += 10.0
-            elif name_query in row_name:
-                score += 5.0
-        
-        boosted_scores.append(score)
-
-    filtered_df = filtered_df.copy()
-    filtered_df['S_taste'] = boosted_scores
-
-    final_candidates = filtered_df
-
-    # --- BƯỚC 5: SẮP XẾP ---
-    sort_by = "relevance"
-    query_lower = processed_query.lower()
-    
-    if "gần" in query_lower:
-        sort_by = "distance"
-        final_candidates = final_candidates.sort_values('distance_km', ascending=True)
-    elif "rẻ" in query_lower:
-        sort_by = "price"
-        final_candidates = final_candidates.sort_values('price', ascending=True)
-    elif any(x in query_lower for x in ['ngon', 'tốt nhất', 'nổi tiếng', 'rating', 'đánh giá']):
-        sort_by = "rating"
-        final_candidates = final_candidates.sort_values('rating', ascending=False)
-    else:
-        final_candidates = final_candidates.sort_values('S_taste', ascending=False)
-        
-    scores_list = []
-    for _, row in final_candidates.head(64).iterrows():
-        scores_list.append({
-            "id": str(row['id']),
-            "name": str(row['name']),
-            "tags": str(row['tags']),
-            "S_taste": float(row.get('S_taste', 0.0)),
-            "distance_km": float(row.get('distance_km', 999.0)),
-            "price": int(row['price'])
-        })
-        
-    return {"sort_by": sort_by, "scores": scores_list}
-
-@app.post("/sentiment", response_model=SentimentResponse)
-async def handle_sentiment(request_data: SentimentRequest):
-    if not sentiment_pipeline: 
-        return {"label": "neutral", "score": 0.5} 
-    res = sentiment_pipeline(request_data.review)[0]
-    return {"label": res['label'], "score": res['score']}
-
-@app.post("/predict-food")
-async def predict_food(file: UploadFile = File(...)):
-    if not yolo_model:
-        raise HTTPException(status_code=503, detail="Model AI chưa sẵn sàng")
-    
-    try:
-        contents = await file.read()
-        image = Image.open(io.BytesIO(contents))
-        
-        # Chạy model
-        results = yolo_model(image)
-        
-        detected_name = ""
-        max_conf = 0.0
-        
-        if results and len(results) > 0:
-            result = results[0]
-            if result.boxes:
-                # Lấy box có độ tự tin cao nhất
-                top_box = sorted(result.boxes, key=lambda x: x.conf, reverse=True)[0]
-                max_conf = float(top_box.conf)
-                cls_id = int(top_box.cls)
-                detected_name = result.names[cls_id] 
-
-        if not detected_name:
-            return {"food_name": None, "message": "Không nhận diện được món ăn"}
-
-        # --- LOGIC XỬ LÝ TÊN THÔNG MINH ---
-        # 1. Làm sạch tên gốc: "bun_bo_hue" -> "bun bo hue"
-        name_clean = detected_name.lower().replace("_", " ").replace("-", " ").strip()
-        
-        # 2. Tìm trong từ điển
-        # Ưu tiên 1: Tìm chính xác theo tên đã làm sạch (vd: "bun bo hue")
-        translated_name = EN_VI_MAPPING.get(name_clean)
-        
-        # Ưu tiên 2: Tìm theo tên gốc nếu tên sạch không thấy (vd: "bun-bo-hue")
-        if not translated_name:
-            translated_name = EN_VI_MAPPING.get(detected_name.lower())
-            
-        # Ưu tiên 3: Tìm gần đúng (vd: detected="vietnamese pho" -> map được "pho")
-        if not translated_name:
-            # Mặc định lấy tên sạch nếu không tìm thấy
-            translated_name = name_clean 
-            for k, v in EN_VI_MAPPING.items():
-                # Nếu từ khóa trong từ điển nằm trọn trong tên detected (hoặc ngược lại)
-                if k in name_clean or name_clean in k:
-                    translated_name = v
-                    break
-
-        # 3. Format kết quả đẹp (Viết Hoa Chữ Cái Đầu)
-        final_name = translated_name.title()
-
-        print(f"AI Detected: '{detected_name}' -> Clean: '{name_clean}' -> Final: '{final_name}'")
-
-        return {
-            "food_name": final_name, 
-            "original_name": detected_name,
-            "confidence": max_conf
-        }
-
-    except Exception as e:
-        print(f"Lỗi dự đoán ảnh: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-        # ... (Các phần import và code cũ giữ nguyên)
-
-# [MỚI] Model cho Chatbot
 class ChatRequest(BaseModel):
-    message: str # Tin nhắn người dùng (Vd: "Tìm quán phở ngon")
-    user_gps: Optional[List[float]] = None
+    message: str = Field(default="", max_length=500)
+    history: list[ChatMessage] = Field(default_factory=list, max_length=20)
+    user_gps: list[float] | None = None
+    lang: Literal["vi", "en"] = "vi"
+    limit: int = Field(default=5, ge=1, le=20)
+
+    _check_gps = field_validator("user_gps")(
+        RecommendRequest._check_gps.__func__  # reuse the same validation
+    )
+
 
 class ChatResponse(BaseModel):
-    reply_text: str # Câu trả lời của bot
-    data: List[TasteScore] # Danh sách quán ăn kèm theo
+    reply: str
+    results: list[TasteScore] = Field(default_factory=list)
+    kind: str = "results"
+    intent: dict[str, Any] | None = None
+    total_matches: int = 0
+    relaxed_filters: list[str] = Field(default_factory=list)
+    # Kept so any older client reading `reply_text` keeps working.
+    reply_text: str = ""
 
-@app.post("/chat", response_model=ChatResponse)
-async def handle_chat(request_data: ChatRequest):
-    # 1. Tận dụng logic recommend có sẵn
-    rec_req = RecommendRequest(
-        query=request_data.message, 
-        user_gps=request_data.user_gps
-    )
-    
-    # Gọi hàm xử lý recommend
-    rec_result = await handle_recommendation(rec_req)
-    
-    # [FIX LỖI TẠI ĐÂY] 
-    # Vì rec_result là dictionary nên phải dùng ngoặc vuông ['scores'] để lấy dữ liệu
-    top_results = rec_result['scores'][:5] 
-    
-    count = len(top_results)
-    
-    # 3. Tạo câu trả lời văn bản
-    reply = ""
-    if count == 0:
-        reply = f"Rất tiếc, mình chưa tìm thấy quán nào phù hợp với yêu cầu '{request_data.message}'. Bạn thử đổi từ khóa khác xem sao nhé (ví dụ: 'phở bò', 'cơm tấm')."
-    else:
-        reply = f"Mình đã tìm được {count} địa điểm phù hợp nhất với yêu cầu '{request_data.message}' của bạn. Mời bạn tham khảo nhé!"
 
+class IntentRequest(BaseModel):
+    query: str = Field(default="", max_length=500)
+    has_gps: bool = False
+
+
+# ==========================================================================
+# Lifespan
+# ==========================================================================
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Warm the caches on boot.
+
+    Replaces the deprecated ``@app.on_event("startup")`` hook. Model loads are
+    individually guarded: one failing model must not stop the service, so the
+    healthy endpoints stay usable and /health reports what is degraded.
+    """
+    logger.info("Starting VietNomNom AI service v%s", SERVICE_VERSION)
+    started = time.time()
+
+    store.reload()
+    if settings.enable_sentiment:
+        analyzer.load()
+    if settings.enable_yolo:
+        detector.load()
+
+    logger.info("Startup finished in %.1fs", time.time() - started)
+    logger.info("Status: %s", health_payload())
+    yield
+    logger.info("Shutting down")
+
+
+app = FastAPI(
+    title="VietNomNom AI Service",
+    version=SERVICE_VERSION,
+    description="Recommendation, chat, sentiment and food recognition.",
+    lifespan=lifespan,
+)
+
+# "*" cannot be combined with credentials, so only enable them for an explicit
+# origin list. The old config sent both, which browsers reject outright.
+allow_all = "*" in settings.cors_origins
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_credentials=not allow_all,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+
+def require_admin(x_admin_token: str = Header(default="")) -> None:
+    """Guard destructive/expensive endpoints.
+
+    Refuses when no token is configured, so an unset ADMIN_TOKEN fails closed
+    rather than leaving the endpoint open to anyone.
+    """
+    if not settings.admin_token:
+        raise HTTPException(503, "ADMIN_TOKEN is not configured on the server")
+    if x_admin_token != settings.admin_token:
+        raise HTTPException(401, "Invalid admin token")
+
+
+# ==========================================================================
+# Health
+# ==========================================================================
+def health_payload() -> dict:
+    data = store.status()
     return {
-        "reply_text": reply,
-        "data": top_results
+        "status": "ok" if data["restaurants"] > 0 else "degraded",
+        "version": SERVICE_VERSION,
+        "data": data,
+        "models": {
+            "sentiment": {"ready": analyzer.ready, "error": analyzer.error},
+            "yolo": {"ready": detector.ready, "error": detector.error},
+            "semantic_search": {
+                "ready": store.semantic_ready,
+                "error": data["embedding_error"],
+            },
+        },
     }
-# ... (Phần if __name__ == "__main__": giữ nguyên)
+
+
+@app.get("/")
+async def root() -> dict:
+    payload = health_payload()
+    # Keep the original keys so existing uptime checks keep passing.
+    payload["data_status"] = (
+        "Active" if payload["data"]["restaurants"] > 0 else "Empty Data"
+    )
+    return payload
+
+
+@app.get("/health")
+async def health() -> dict:
+    return health_payload()
+
+
+# ==========================================================================
+# Recommendation
+# ==========================================================================
+@app.post("/recommend", response_model=RecommendResponse)
+async def handle_recommend(request: RecommendRequest) -> dict:
+    result = search(
+        request.query,
+        user_gps=request.user_gps,
+        city_filter=request.city_filter,
+        limit=request.limit,
+        candidate_ids=request.candidate_ids,
+    )
+    if not store.is_ready:
+        raise HTTPException(
+            503,
+            store.status()["load_error"]
+            or "Restaurant data is not loaded yet, please retry shortly.",
+        )
+    return {
+        "sort_by": result.sort_by,
+        "scores": [row_to_payload(row) for _, row in result.rows.iterrows()],
+        "total_matches": result.total_before_ranking,
+        "intent": result.intent.to_dict(),
+        "relaxed_filters": result.relaxed_filters,
+    }
+
+
+@app.post("/parse-intent")
+async def handle_parse_intent(request: IntentRequest) -> dict:
+    """Expose the intent parser on its own, for debugging and for the backend."""
+    return parse_intent(request.query, has_gps=request.has_gps).to_dict()
+
+
+# ==========================================================================
+# Chat
+# ==========================================================================
+@app.post("/chat", response_model=ChatResponse)
+async def handle_chat(request: ChatRequest) -> dict:
+    history = [
+        chat_engine.ChatTurn(role=item.role, text=item.text)
+        for item in request.history
+    ]
+    outcome = chat_engine.respond(
+        request.message,
+        history=history,
+        user_gps=request.user_gps,
+        lang=request.lang,
+        limit=request.limit,
+    )
+    return {
+        "reply": outcome["reply"],
+        "reply_text": outcome["reply"],  # legacy key
+        "results": outcome["results"],
+        "kind": outcome["kind"],
+        "intent": outcome.get("intent"),
+        "total_matches": outcome.get("total_matches", 0),
+        "relaxed_filters": outcome.get("relaxed_filters", []),
+    }
+
+
+# ==========================================================================
+# Sentiment
+# ==========================================================================
+@app.post("/sentiment", response_model=SentimentResponse)
+async def handle_sentiment(request: SentimentRequest) -> dict:
+    return analyzer.analyze(request.review)
+
+
+@app.post("/sentiment/batch", response_model=SentimentBatchResponse)
+async def handle_sentiment_batch(request: SentimentBatchRequest) -> dict:
+    """Classify many reviews in one pass.
+
+    The backfill job used to issue one HTTP request per review; this turns a
+    multi-minute migration into a handful of calls.
+    """
+    return {"results": analyzer.analyze_batch(request.reviews)}
+
+
+@app.post("/review-insights")
+async def handle_review_insights(request: ReviewInsightRequest) -> dict:
+    """Aspect-level digest of a restaurant's reviews."""
+    return review_insights.summarize_reviews(
+        [item.model_dump() for item in request.reviews], lang=request.lang
+    )
+
+
+# ==========================================================================
+# Food photo recognition
+# ==========================================================================
+@app.post("/predict-food")
+async def predict_food(file: UploadFile = File(...)) -> dict:
+    if not detector.ready:
+        detector.load()
+    if not detector.ready:
+        raise HTTPException(503, detector.error or "Food model is unavailable")
+
+    if file.content_type and not file.content_type.startswith("image/"):
+        raise HTTPException(415, f"Expected an image, got {file.content_type}")
+
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(400, "Empty upload")
+    # Guard the upload size: an unbounded read is a trivial memory exhaustion
+    # vector on a small Space.
+    if len(contents) > settings.max_upload_bytes:
+        raise HTTPException(
+            413, f"Image larger than {settings.max_upload_mb}MB"
+        )
+
+    detections = detector.detect(contents, top_k=3)
+    if not detections:
+        return {
+            "food_name": None,
+            "message": "Không nhận diện được món ăn",
+            "detections": [],
+        }
+
+    best = detections[0]
+    return {
+        # Original contract.
+        "food_name": title_case(best["dish"]),
+        "original_name": best["class_name"],
+        "confidence": best["confidence"],
+        # Additive: lets the client offer "did you mean ...?"
+        "detections": [
+            {
+                "food_name": title_case(item["dish"]),
+                "original_name": item["class_name"],
+                "confidence": item["confidence"],
+            }
+            for item in detections
+        ],
+    }
+
+
+@app.post("/search-by-image")
+async def search_by_image(file: UploadFile = File(...)) -> dict:
+    """Recognise a dish and return matching restaurants in one round trip."""
+    prediction = await predict_food(file)
+    dish = prediction.get("food_name")
+    if not dish:
+        return {"detected_food": None, "scores": [], "detections": []}
+
+    result = search(dish, limit=10)
+    return {
+        "detected_food": dish,
+        "confidence": prediction.get("confidence"),
+        "detections": prediction.get("detections", []),
+        "sort_by": result.sort_by,
+        "scores": [row_to_payload(row) for _, row in result.rows.iterrows()],
+    }
+
+
+# ==========================================================================
+# Admin
+# ==========================================================================
+@app.post("/admin/reload", dependencies=[Depends(require_admin)])
+async def admin_reload() -> dict:
+    """Re-read the restaurant collection and rebuild the search indexes."""
+    return store.reload()
+
 
 if __name__ == "__main__":
-    uvicorn.run("api:app", host="127.0.0.1", port=5000, reload=True)
+    import uvicorn
+
+    uvicorn.run(
+        "api:app",
+        host=settings.host,
+        port=settings.port,
+        reload=False,
+    )
