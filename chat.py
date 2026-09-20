@@ -156,6 +156,7 @@ RELAXED_NOTES = {
         "location": "mình đã mở rộng ra ngoài khu vực bạn nói",
         "radius": "mình đã tìm xa hơn một chút",
         "dish": "mình chưa có đúng món đó nên gợi ý các quán gần nghĩa",
+        "dish_broadened": "mình chưa có đúng món đó nên mở rộng sang nhóm món tương tự",
         "time": "mình đã bỏ qua điều kiện giờ mở cửa",
         "exclude": "mình chưa lọc được hết yêu cầu loại trừ",
         "open_now": "mình đã bỏ qua điều kiện đang mở cửa",
@@ -167,6 +168,7 @@ RELAXED_NOTES = {
         "location": "I looked beyond the area you mentioned",
         "radius": "I searched a bit further out",
         "dish": "I don't have that exact dish, so these are the closest matches",
+        "dish_broadened": "I widened the search to the closest dish category",
         "time": "I ignored the opening-hours filter",
         "exclude": "I couldn't fully apply your exclusions",
         "open_now": "I ignored the open-now filter",
@@ -273,7 +275,10 @@ def _describe_top(row: dict, lang: str) -> str:
 
 
 def _success_reply(result: SearchResult, payloads: list[dict], lang: str) -> str:
-    count = len(payloads)
+    # Report how many places actually matched, not how many fit on this page.
+    # Saying "found 3" when 87 matched and only 3 were shown is simply wrong.
+    total = result.total_before_ranking or len(payloads)
+    shown = len(payloads)
     intent = result.intent
     subject = (
         ", ".join(intent.dishes) if intent.dishes
@@ -284,18 +289,22 @@ def _success_reply(result: SearchResult, payloads: list[dict], lang: str) -> str
     )
 
     if lang == "vi":
-        head = f"Mình tìm được {count} quán"
+        head = f"Mình tìm được {total} quán"
         if subject:
             head += f' cho "{subject}"'
         if where:
             head += f" ở {where}"
+        if total > shown:
+            head += f", đây là {shown} quán phù hợp nhất"
         head += f", {SORT_PHRASES['vi'][intent.sort_by]}."
     else:
-        head = f"I found {count} place{'s' if count != 1 else ''}"
+        head = f"I found {total} place{'s' if total != 1 else ''}"
         if subject:
             head += f' for "{subject}"'
         if where:
             head += f" in {where}"
+        if total > shown:
+            head += f", here are the top {shown}"
         head += f", {SORT_PHRASES['en'][intent.sort_by]}."
 
     parts = [head]

@@ -16,7 +16,9 @@ Pipeline
    * dish-tag overlap,
    * TF-IDF char-ngram similarity (robust to missing diacritics),
    * embedding cosine similarity (true synonyms: "đồ biển" ~ "hải sản"),
-   * small quality and proximity priors.
+   * small quality and proximity priors -- the quality prior uses the
+     review-count-shrunk rating, not the raw one, so a 10.0 backed by a single
+     review cannot outrank a well-reviewed 8.
 3. **Ordering** by the criterion the intent asked for.
 """
 
@@ -29,6 +31,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+import knowledge as kb
 import text_utils as tu
 from config import settings
 from data_store import store
@@ -54,8 +57,17 @@ NEARBY_RADIUS_KM = 20.0
 
 # Minimum query-match evidence (priors excluded) for a result to count as a
 # real hit. char-ngram TF-IDF gives every row a small non-zero score, so the
-# floor sits above that noise rather than at zero.
-MIN_CONTENT_SCORE = 0.12
+# floor has to sit above that noise rather than at zero.
+#
+# Calibrated against the real 5,700-row dataset rather than guessed. Measured
+# peak content score per query:
+#     real      "bún bò huế" 8.62 · "phở" 5.72 · "bánh mì" 5.58
+#               "cà phê trứng" 3.13 · "Phở Thìn Lò Đúc" 2.80 · worst 1.33
+#     nonsense  "zzzqqq" 0.28 · "qwertyuiop" 0.16 · "asdfgh" 0.14
+# 0.8 sits ~3x above the nonsense ceiling and ~1.6x below the weakest real
+# query. The original 0.12 was inside the noise band, so a nonsense query
+# returned the whole database ranked by rating.
+MIN_CONTENT_SCORE = 0.8
 
 
 @dataclass
@@ -141,6 +153,55 @@ def _tag_contains(frame: pd.DataFrame, needles: list[str]) -> pd.Series:
     for needle in needles:
         mask |= blob.str.contains(tu.normalize(needle), regex=False, na=False)
     return mask
+
+
+def _broaden(dish: str) -> list[str]:
+    """Progressively more general forms of a dish name, most specific first.
+
+    "cà phê trứng" -> ["cà phê trứng", "cà phê"]
+
+    Used so a narrow dish that nothing matches falls back to its category
+    instead of being abandoned. Only prefixes that are themselves known tags
+    are offered, so "bún bò" is a valid fallback for "bún bò huế" but
+    "hột vịt" is not invented as a fallback for "hột vịt lộn".
+    """
+    words = dish.split()
+    forms = [dish]
+    for cut in range(len(words) - 1, 0, -1):
+        candidate = " ".join(words[:cut])
+        if candidate in kb.DISH_TAGS:
+            forms.append(candidate)
+    return forms
+
+
+def _apply_dish_filter(
+    frame: pd.DataFrame, intent: Intent, relaxed: list[str]
+) -> pd.DataFrame:
+    """Keep rows serving the requested dish, broadening before giving up.
+
+    For "cà phê trứng ở Hoàn Kiếm" there is no egg coffee in Hoàn Kiếm, so the
+    plain filter emptied the set, relaxed itself, and the query was answered
+    with a pizza place — the highest-rated row in the district. Now it retries
+    with "cà phê" first; only if even that finds nothing is the filter recorded
+    as relaxed, and the caller then applies the relevance floor so a
+    dish-less answer comes back empty rather than arbitrary.
+    """
+    ladders = [_broaden(dish) for dish in intent.dishes]
+    # Walk broadening levels together. zip() would truncate to the shortest
+    # ladder, so a two-dish query where only one dish can broaden would never
+    # reach the broadened level at all; clamping each ladder to its most
+    # general form instead keeps every level reachable.
+    depth = max(len(ladder) for ladder in ladders)
+    for level in range(depth):
+        attempt = [ladder[min(level, len(ladder) - 1)] for ladder in ladders]
+        matches = frame[_tag_contains(frame, attempt)]
+        if not matches.empty:
+            if attempt != intent.dishes:
+                relaxed.append("dish_broadened")
+            return matches
+
+    relaxed.append("dish")
+    return frame
 
 
 def _is_open_now(hours: str) -> bool:
@@ -241,8 +302,13 @@ def _relevance(frame: pd.DataFrame, intent: Intent) -> tuple[np.ndarray, np.ndar
     # Everything above is evidence that the row matches the query itself.
     content = scores.copy()
 
-    # --- quality prior, normalized to 0..1 so it can only break ties
-    rating = frame["rating"].to_numpy(dtype="float32")
+    # --- quality prior, normalized to 0..1 so it can only break ties.
+    # Uses the shrunk rating (see data_store.RATING_CONFIDENCE): the raw value
+    # would let a 10.0 backed by a single review outrank a well-reviewed 7.9.
+    rating_column = (
+        "rating_adjusted" if "rating_adjusted" in frame.columns else "rating"
+    )
+    rating = frame[rating_column].to_numpy(dtype="float32")
     scores += W_RATING_PRIOR * np.clip(rating / 10.0, 0.0, 1.0)
 
     # --- proximity prior, only when a distance is actually known
@@ -271,8 +337,11 @@ def _order(frame: pd.DataFrame, intent: Intent) -> pd.DataFrame:
             ["_price_key", "rating"], ascending=[True, False], na_position="last"
         ).drop(columns="_price_key")
     if intent.sort_by == "rating":
+        # "ngon nhất" should mean reliably well rated, so order by the shrunk
+        # rating and break ties on the raw one.
+        key = "rating_adjusted" if "rating_adjusted" in frame.columns else "rating"
         return frame.sort_values(
-            ["rating", "relevance"], ascending=[False, False]
+            [key, "rating", "relevance"], ascending=[False, False, False]
         )
     return frame.sort_values(
         ["relevance", "rating"], ascending=[False, False]
@@ -310,8 +379,6 @@ def search(
     if location_mask is not None:
         working = _apply_filter(working, location_mask, "location", relaxed)
     elif city_filter:
-        import knowledge as kb
-
         canonical = kb.CITY_KEY_ALIASES.get(
             tu.normalize(city_filter).replace(" ", ""), city_filter
         )
@@ -344,9 +411,7 @@ def search(
     # and the query answered with a coffee shop. This order instead keeps the
     # seafood and relaxes the budget, which is what the user meant.
     if intent.dishes:
-        working = _apply_filter(
-            working, _tag_contains(working, intent.dishes), "dish", relaxed
-        )
+        working = _apply_dish_filter(working, intent, relaxed)
 
     if intent.price_max:
         # Keep rows with no known price: absence of data is not a violation.
@@ -373,16 +438,31 @@ def search(
     total_scores, content_scores = _relevance(working, intent)
     working = working.assign(relevance=total_scores)
 
-    # A query that named nothing we recognise and matches no text is a
-    # nonsense query. Answering it with the whole database sorted by rating
-    # looks like a broken search, so return nothing and let the UI say so.
-    if (
-        query
-        and query.strip()
-        and not intent.has_constraints
-        and content_scores.max(initial=0.0) < MIN_CONTENT_SCORE
-    ):
-        return SearchResult(intent, working.iloc[0:0], 0, relaxed)
+    # Two cases where a result set has to be proven relevant rather than just
+    # ordered. In both, answering with whatever scored highest on the rating
+    # prior looks like a broken search, so it is better to return nothing and
+    # let the UI say "not found".
+    #
+    #  1. Nothing in the query was recognised and no text matches -- a nonsense
+    #     query such as "zzzqqq".
+    #  2. The dish filter was relaxed entirely, so the candidates are merely
+    #     the right *place*, with no evidence of the right food.
+    #
+    # An explicit ranking counts as expressed intent even with no dish named:
+    # "đồ ăn gần đây" asks to browse by distance and must not be rejected for
+    # weak text similarity, whereas "zzzqqq" expresses nothing at all.
+    dish_unmatched = "dish" in relaxed
+    expressed_intent = intent.has_constraints or intent.sort_by != "relevance"
+    if query and query.strip() and (not expressed_intent or dish_unmatched):
+        if content_scores.max(initial=0.0) < MIN_CONTENT_SCORE:
+            return SearchResult(intent, working.iloc[0:0], 0, relaxed)
+        if dish_unmatched:
+            # Some rows do carry query evidence: keep only those, so a search
+            # for coffee never answers with the district's best pizza.
+            keep = content_scores >= MIN_CONTENT_SCORE
+            working = working[keep]
+            if working.empty:
+                return SearchResult(intent, working, 0, relaxed)
 
     working = _order(working, intent)
 
@@ -404,6 +484,8 @@ def row_to_payload(row: Any) -> dict:
         "district": str(row.get("district", "")),
         "city": str(row.get("city", "")),
         "rating": round(float(row.get("rating", 0.0) or 0.0), 2),
+        "rating_adjusted": round(float(row.get("rating_adjusted", 0.0) or 0.0), 2),
+        "review_count": int(row.get("review_count", 0) or 0),
         "image_url": str(row.get("image_url", "") or ""),
         "source_url": str(row.get("source_url", "") or ""),
         "opening_hours": str(row.get("opening_hours", "") or ""),
