@@ -15,8 +15,10 @@ RUN useradd -m -u 1000 appuser
 ENV HOME=/home/appuser \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    # HF_HOME alone is correct. TRANSFORMERS_CACHE used to be set alongside it
+    # and is deprecated -- transformers logs a FutureWarning on every boot and
+    # removes it in v5. HF_HOME already covers the same cache location.
     HF_HOME=/home/appuser/.cache/huggingface \
-    TRANSFORMERS_CACHE=/home/appuser/.cache/huggingface \
     SENTENCE_TRANSFORMERS_HOME=/home/appuser/.cache/sentence-transformers \
     YOLO_CONFIG_DIR=/home/appuser/.config/Ultralytics \
     MPLCONFIGDIR=/home/appuser/.cache/matplotlib \

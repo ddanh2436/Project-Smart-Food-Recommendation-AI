@@ -120,6 +120,22 @@ HELP_REPLIES = {
     ),
 }
 
+# Shown when the user asks for somewhere nearby but sent no coordinates.
+NEED_LOCATION_REPLIES = {
+    "vi": (
+        "Mình chưa biết bạn đang ở đâu nên chưa tính được quán nào gần "
+        "nhất 📍 Bạn bật quyền vị trí giúp mình nhé, hoặc nói rõ khu vực "
+        "— ví dụ “phở ở Quận 1”. Trong lúc đó, đây là những quán được "
+        "đánh giá cao nhất:"
+    ),
+    "en": (
+        "I do not know where you are, so I cannot work out what is "
+        "closest 📍 Allow location access, or name an area — for example "
+        "“pho in District 1”. In the meantime, here are the highest-rated "
+        "ones:"
+    ),
+}
+
 NOT_FOUND_REPLIES = {
     "vi": [
         "Hic, mình chưa tìm thấy quán nào khớp với \"{query}\". Bạn thử từ khóa ngắn hơn xem sao? 🍜",
@@ -412,6 +428,19 @@ def respond(
         effective_query, user_gps=user_gps, limit=max(limit + offset, 10)
     )
 
+    # A "near me" question with no coordinates cannot be ordered by distance;
+    # ordering by quality is the most useful honest substitute.
+    if result.intent.wants_nearby and not has_gps and not result.rows.empty:
+        from search import _order  # internal helper, deliberately reused
+
+        result.intent.sort_by = "rating"
+        result = SearchResult(
+            result.intent,
+            _order(result.rows, result.intent),
+            result.total_before_ranking,
+            result.relaxed_filters,
+        )
+
     if refinement:
         # Re-rank the already-filtered set by what the follow-up asked for.
         result.intent.sort_by = refinement
@@ -441,6 +470,22 @@ def respond(
             "results": [],
             "intent": result.intent.to_dict(),
             "kind": "not_found",
+        }
+
+    # The user asked for somewhere nearby but we have no coordinates.
+    #
+    # The proximity request used to be dropped silently and the answer came
+    # back ranked by relevance, so "quán phở gần đây" listed places in Hà Nội
+    # and Đà Lạt as though they were nearby. Say what is missing instead, and
+    # fall back to quality rather than pretending the order means proximity.
+    if result.intent.wants_nearby and not has_gps:
+        return {
+            "reply": NEED_LOCATION_REPLIES[lang],
+            "results": payloads,
+            "intent": result.intent.to_dict(),
+            "kind": "need_location",
+            "total_matches": result.total_before_ranking,
+            "relaxed_filters": result.relaxed_filters,
         }
 
     reply = _success_reply(result, payloads, lang)
