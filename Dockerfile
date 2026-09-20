@@ -35,9 +35,35 @@ COPY --chown=appuser:appuser . .
 USER appuser
 RUN mkdir -p "$HF_HOME" "$SENTENCE_TRANSFORMERS_HOME" "$YOLO_CONFIG_DIR" "$MPLCONFIGDIR"
 
+# Download the models at build time so they live in an image layer.
+#
+# A Space's container filesystem is ephemeral and a free Space sleeps after
+# about 48h idle, so without this every cold start re-downloads roughly 600MB
+# before it can serve the first request -- slow enough to look broken, and
+# liable to time out. Baking them in makes startup a model *load* rather than a
+# download.
+#
+# Run as appuser, after the USER switch, so the files land in the cache
+# directories the runtime actually reads.
+#
+# Kept non-fatal: if the Hub is unreachable during a build, the image still
+# ships and the service falls back to downloading on first use, rather than
+# failing the deploy outright.
+RUN python -c "\
+from transformers import pipeline; \
+pipeline('sentiment-analysis', model='5CD-AI/Vietnamese-Sentiment-visobert')" \
+    || echo 'WARN: sentiment model not pre-cached, will download at runtime'
+
+RUN python -c "\
+from sentence_transformers import SentenceTransformer; \
+SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')" \
+    || echo 'WARN: embedding model not pre-cached, will download at runtime'
+
 EXPOSE 7860
 
-HEALTHCHECK --interval=60s --timeout=10s --start-period=180s --retries=3 \
+# start-period covers loading the (now pre-cached) models and the first read
+# of the restaurant collection.
+HEALTHCHECK --interval=60s --timeout=10s --start-period=120s --retries=3 \
     CMD curl -fsS "http://localhost:${PORT}/health" || exit 1
 
 # Single worker: each one would load its own copy of the models, and a free
