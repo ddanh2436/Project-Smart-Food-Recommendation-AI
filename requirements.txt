@@ -1,39 +1,54 @@
 # VietNomNom AI service — all dependencies are free and run locally.
 #
-# Versions are pinned with a compatible-release bound so a Hugging Face Space
-# rebuild cannot silently pull a breaking major version. The original file was
-# entirely unpinned, which is why a rebuild could change behaviour on its own.
+# VERSIONS ARE PINNED TO THE SET THIS SERVICE IS ACTUALLY VERIFIED ON.
+#
+# The original file was entirely unpinned, and that is what broke the first
+# deployment: `transformers` has since released a 5.x major version, so an
+# unpinned build installed 5.x and the Vietnamese sentiment model failed to
+# load with "'dict' object is not an instance of 'Sequence'" — a tokenizer
+# deserialization error from the breaking change. The same trap applies to
+# `sentence-transformers`, whose 6.x line *requires* transformers>=5.0; leaving
+# it unpinned would drag transformers 5.x back in and break sentiment again.
+#
+# So: upper bounds on everything, and the transformers/sentence-transformers
+# pair must be moved together.
 
 # --- Web framework ---
-fastapi~=0.115.0
-uvicorn[standard]~=0.32.0
-pydantic~=2.9.0
-python-multipart~=0.0.12
-python-dotenv~=1.0.1
+fastapi~=0.121.0
+uvicorn[standard]~=0.38.0
+pydantic~=2.12.0
+python-multipart~=0.0.20
+python-dotenv~=1.2.0
 
 # --- Data & classic ML ---
-pandas~=2.2.0
-numpy~=1.26.4
-scikit-learn~=1.5.0
-pymongo~=4.10.0
+pandas~=2.3.0
+numpy~=2.2.0
+scikit-learn~=1.7.0
+pymongo~=4.15.0
 
 # --- Deep learning ---
-# CPU-only torch keeps the image small enough for a free Space. If you deploy
-# somewhere with a GPU, drop the --extra-index-url line and let pip pick the
-# CUDA build instead.
+# CPU-only torch keeps the image small enough for a free Space. The pytorch
+# index publishes `2.9.x+cpu`, which sorts above the plain `2.9.x` on PyPI, so
+# pip prefers the CPU wheel. Drop the index line if you deploy to a GPU host.
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch~=2.5.0
+torch~=2.9.0
 
 # --- Vietnamese sentiment (5CD-AI/Vietnamese-Sentiment-visobert) ---
-transformers~=4.46.0
+# Must stay on the 4.x line: 5.x breaks this model's tokenizer.
+transformers~=4.57.1
 
 # --- Multilingual semantic search ---
-# Optional at runtime: if this import fails the service logs a warning and
-# falls back to TF-IDF only. Set ENABLE_SEMANTIC_SEARCH=false to skip it and
+# 5.x is the last line that requires transformers<5.0. Do NOT bump to 6.x
+# without also verifying the sentiment model against transformers 5.x.
+#
+# Optional at runtime: if the import fails the service logs a warning and falls
+# back to TF-IDF only. Set ENABLE_SEMANTIC_SEARCH=false to skip it entirely and
 # save roughly 500MB of RAM on a small Space.
-sentence-transformers~=3.2.0
+sentence-transformers~=5.7.0
 
 # --- Food photo recognition (best.pt) ---
-ultralytics~=8.3.0
-Pillow~=11.0.0
-opencv-python-headless~=4.10.0
+ultralytics~=8.3.233
+Pillow~=12.0.0
+# The headless build is the right one for a server: it drops the GUI bindings
+# that would otherwise need an X display.
+opencv-python-headless~=4.12.0
