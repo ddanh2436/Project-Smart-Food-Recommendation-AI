@@ -52,6 +52,19 @@ W_ADJECTIVE = 0.35
 W_RATING_PRIOR = 0.25
 W_PROXIMITY_PRIOR = 0.30
 
+# Rating weight used once the dish filter has already matched.
+#
+# At that point every surviving row genuinely serves the dish, so lexical
+# similarity has nothing left to contribute and merely favours short names:
+# a search for "phở" led with a 5.0-rated "Phở Cuốn Hà Nội" ahead of 350 other
+# pho places, purely because its name is mostly the word "phở". With the
+# category settled, quality is what the user is actually choosing on.
+#
+# Deliberately NOT applied to name-like queries. Raising this weight globally
+# was tried and broke name search outright -- "Phở Thìn Lò Đúc" started
+# returning "Phở Cần Thơ" -- so it is gated on `intent.name_like` being false.
+W_RATING_PRIOR_CATEGORICAL = 3.0
+
 # Rows farther than this are dropped when the user asked for "near me".
 NEARBY_RADIUS_KM = 20.0
 
@@ -236,7 +249,9 @@ def _is_open_now(hours: str) -> bool:
     return False
 
 
-def _relevance(frame: pd.DataFrame, intent: Intent) -> tuple[np.ndarray, np.ndarray]:
+def _relevance(
+    frame: pd.DataFrame, intent: Intent, dish_matched: bool = False
+) -> tuple[np.ndarray, np.ndarray]:
     """Blended relevance for every row.
 
     Returns ``(total, content)``. ``content`` excludes the rating and
@@ -302,14 +317,23 @@ def _relevance(frame: pd.DataFrame, intent: Intent) -> tuple[np.ndarray, np.ndar
     # Everything above is evidence that the row matches the query itself.
     content = scores.copy()
 
-    # --- quality prior, normalized to 0..1 so it can only break ties.
+    # --- quality prior, normalized to 0..1.
     # Uses the shrunk rating (see data_store.RATING_CONFIDENCE): the raw value
     # would let a 10.0 backed by a single review outrank a well-reviewed 7.9.
+    #
+    # Weight depends on whether the category is already settled. Once the dish
+    # filter has matched, every candidate is relevant and quality decides;
+    # otherwise the prior stays small so it cannot outweigh a name match.
     rating_column = (
         "rating_adjusted" if "rating_adjusted" in frame.columns else "rating"
     )
     rating = frame[rating_column].to_numpy(dtype="float32")
-    scores += W_RATING_PRIOR * np.clip(rating / 10.0, 0.0, 1.0)
+    rating_weight = (
+        W_RATING_PRIOR_CATEGORICAL
+        if (dish_matched and not intent.name_like)
+        else W_RATING_PRIOR
+    )
+    scores += rating_weight * np.clip(rating / 10.0, 0.0, 1.0)
 
     # --- proximity prior, only when a distance is actually known
     if "distance_km" in frame.columns:
@@ -412,6 +436,8 @@ def search(
     # seafood and relaxes the budget, which is what the user meant.
     if intent.dishes:
         working = _apply_dish_filter(working, intent, relaxed)
+    # A clean dish match means the candidate set is already on-topic.
+    dish_matched = bool(intent.dishes) and "dish" not in relaxed
 
     if intent.price_max:
         # Keep rows with no known price: absence of data is not a violation.
@@ -435,7 +461,7 @@ def search(
         return SearchResult(intent, working, 0, relaxed)
 
     # --- 2. rank ---------------------------------------------------------
-    total_scores, content_scores = _relevance(working, intent)
+    total_scores, content_scores = _relevance(working, intent, dish_matched)
     working = working.assign(relevance=total_scores)
 
     # Two cases where a result set has to be proven relevant rather than just

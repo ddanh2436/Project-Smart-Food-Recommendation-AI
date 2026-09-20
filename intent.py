@@ -155,6 +155,11 @@ class Intent:
     min_rating: float | None = None
     party_size: int | None = None
     open_now: bool = False
+    # True when the user asked for somewhere nearby, whether or not we have
+    # their coordinates. Without this the request was silently dropped when no
+    # GPS was available, and "quán phở gần đây" was answered with restaurants
+    # in other cities as if that were what was asked for.
+    wants_nearby: bool = False
     # How to order results: relevance | distance | price | rating.
     sort_by: str = "relevance"
     # Whatever the rules did not consume, for semantic search to use.
@@ -197,6 +202,7 @@ class Intent:
             "min_rating": self.min_rating,
             "party_size": self.party_size,
             "open_now": self.open_now,
+            "wants_nearby": self.wants_nearby,
             "sort_by": self.sort_by,
             "free_text": self.free_text,
             "name_like": self.name_like,
@@ -223,11 +229,21 @@ def _is_negated(text: str, phrase: str, spans: list[tuple[int, int]]) -> bool:
     return False
 
 
+def _wants_nearby(text: str) -> bool:
+    """Whether the query asks for somewhere close by."""
+    return any(
+        re.search(rf"(?<!\w){re.escape(cue)}(?!\w)", text, re.I)
+        for cue in SORT_DISTANCE_CUES
+    )
+
+
 def _detect_sort(text: str, has_gps: bool) -> str:
     """Pick a ranking criterion from explicit cues in the query."""
     for cue in sorted(SORT_DISTANCE_CUES, key=len, reverse=True):
         if re.search(rf"(?<!\w){re.escape(cue)}(?!\w)", text, re.I):
-            # "gần" without a location is only meaningful with coordinates.
+            # "gần" can only order results when coordinates are available;
+            # `wants_nearby` records the request either way so the caller can
+            # ask for a location instead of quietly ignoring it.
             return "distance" if has_gps else "relevance"
     for cue in sorted(SORT_PRICE_CUES, key=len, reverse=True):
         if re.search(rf"(?<!\w){re.escape(cue)}(?!\w)", text, re.I):
@@ -335,6 +351,7 @@ def parse_intent(query: str, has_gps: bool = False) -> Intent:
 
     # 3. Sort criterion, before the cue words get stripped out.
     intent.sort_by = _detect_sort(translated, has_gps)
+    intent.wants_nearby = _wants_nearby(translated)
 
     # 4. Negation spans, computed on the full text for correct positions.
     negations = _negated_spans(translated)
