@@ -362,6 +362,12 @@ def _merge_intents(previous: Intent, current: Intent) -> Intent:
         open_now=current.open_now or previous.open_now,
         sort_by=current.sort_by if current.sort_by != "relevance" else previous.sort_by,
         free_text=current.free_text or previous.free_text,
+        # Carried forward like the other slots. Without these a follow-up such
+        # as "rẻ hơn đi" dropped the aspect preference the user had already
+        # stated, so "quán sạch sẽ ở Quận 1" silently stopped caring about
+        # hygiene one turn later.
+        aspects=current.aspects or previous.aspects,
+        aspect_avoid=list({*previous.aspect_avoid, *current.aspect_avoid}),
     )
     merged.name_like = len(merged.free_text.split()) >= 2
     return merged

@@ -72,6 +72,13 @@ W_RATING_PRIOR_CATEGORICAL = 3.0
 # decided what is in the running, and this only sorts within it.
 W_ASPECT = 1.6
 
+# Penalty for an aspect the user asked not to be complained about.
+#
+# Slightly smaller than the reward, on purpose. Asking for praise is a positive
+# preference and should be able to reorder a list; asking to avoid complaints
+# is a veto on the worst offenders and should mostly leave the rest alone.
+W_ASPECT_AVOID = 1.2
+
 # Fewer mentions than this is not evidence. A restaurant below the bar scores
 # zero for that aspect -- not negative -- because "nobody mentioned the
 # parking" and "the parking is bad" are different claims, and only one of them
@@ -366,6 +373,22 @@ def _relevance(
         prior = np.zeros(size, dtype="float32")
         prior[evidenced] = np.clip(ratio[evidenced], 0.0, 1.0)
         scores += W_ASPECT * prior
+
+    # --- aspect penalties, for "đừng bị chê phục vụ"
+    #
+    # Scaled by how negative the reviews are, so a place people mildly grumbled
+    # about is docked less than one they complained about outright. Places with
+    # no evidence are untouched: not being mentioned is not a complaint.
+    for key in intent.aspect_avoid:
+        ratio_column, count_column = f"aspect_{key}", f"aspect_{key}_n"
+        if ratio_column not in frame.columns:
+            continue
+        ratio = frame[ratio_column].to_numpy(dtype="float32")
+        mentions = frame[count_column].to_numpy(dtype="float32")
+        evidenced = mentions >= ASPECT_MIN_MENTIONS
+        penalty = np.zeros(size, dtype="float32")
+        penalty[evidenced] = 1.0 - np.clip(ratio[evidenced], 0.0, 1.0)
+        scores -= W_ASPECT_AVOID * penalty
 
     # --- proximity prior, only when a distance is actually known
     if "distance_km" in frame.columns:
