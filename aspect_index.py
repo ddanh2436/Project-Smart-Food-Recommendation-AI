@@ -42,6 +42,13 @@ logger = logging.getLogger(__name__)
 # saying the parking was bad is not a fact about the restaurant.
 MIN_MENTIONS = 3
 
+# Results are written every this many restaurants rather than once at the end
+# of a batch. The first run showed why: ordered by review count, the opening
+# 400 took an hour, and an interruption anywhere in it would have thrown away
+# the whole hour. Flushing often costs a few extra round trips and makes the
+# job resumable at any point.
+FLUSH_EVERY = 25
+
 
 def _client():
     from pymongo import MongoClient
@@ -126,8 +133,18 @@ def build(limit: int = 200, force: bool = False) -> dict:
 
     processed = 0
     skipped = 0
-    writes = []
+    writes: list = []
     now = datetime.now(timezone.utc)
+
+    from pymongo import UpdateOne
+
+    def flush() -> None:
+        if not writes:
+            return
+        restaurants.bulk_write(
+            [UpdateOne(w["filter"], w["update"]) for w in writes], ordered=False
+        )
+        writes.clear()
 
     for document in batch:
         url = document.get("urlGoc")
@@ -167,13 +184,11 @@ def build(limit: int = 200, force: bool = False) -> dict:
             }
         )
         processed += 1
+        if len(writes) >= FLUSH_EVERY:
+            flush()
+            logger.info("Aspect index: %s/%s in this batch", processed, len(batch))
 
-    if writes:
-        from pymongo import UpdateOne
-
-        restaurants.bulk_write(
-            [UpdateOne(w["filter"], w["update"]) for w in writes], ordered=False
-        )
+    flush()
 
     remaining = max(0, pending_total - processed - skipped)
     client.close()
