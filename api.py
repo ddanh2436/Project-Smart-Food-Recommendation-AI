@@ -143,6 +143,13 @@ class ChatRequest(BaseModel):
     )
 
 
+class ChatChip(BaseModel):
+    """A quick reply. `label` is shown, `query` is what gets sent."""
+
+    label: str
+    query: str
+
+
 class ChatResponse(BaseModel):
     reply: str
     results: list[TasteScore] = Field(default_factory=list)
@@ -150,6 +157,10 @@ class ChatResponse(BaseModel):
     intent: dict[str, Any] | None = None
     total_matches: int = 0
     relaxed_filters: list[str] = Field(default_factory=list)
+    # Which of dish / area / price the query left unset, and the chips that
+    # fill them. Empty once the query is specific enough to stand on its own.
+    slots_missing: list[str] = Field(default_factory=list)
+    chips: list[ChatChip] = Field(default_factory=list)
     # Kept so any older client reading `reply_text` keeps working.
     reply_text: str = ""
 

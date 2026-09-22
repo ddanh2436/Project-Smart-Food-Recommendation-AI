@@ -61,6 +61,114 @@ MORE_CUES = [
     "cái khác", "quán khác", "more", "others", "something else",
 ]
 
+# ---------------------------------------------------------------------------
+# Slot filling
+#
+# "quán ở Quận 1" is answerable, but it is answerable with four hundred places.
+# The useful reply is the list plus the one question that would shorten it, and
+# the cheapest way to ask is a row of chips the user can tap.
+#
+# A chip carries a full query rather than a bare word, composed from the slots
+# already known, so tapping "Phở" after "quán ở Quận 1" sends "Phở ở Quận 1"
+# and not "Phở" on its own. The value stays Vietnamese in both languages -- it
+# is what the index is built from -- while the label is translated.
+# ---------------------------------------------------------------------------
+
+DISH_CHIPS = [
+    ("Phở", "Pho"),
+    ("Bún bò", "Bun bo"),
+    ("Cơm tấm", "Com tam"),
+    ("Bánh mì", "Banh mi"),
+    ("Lẩu", "Hot pot"),
+    ("Cà phê", "Coffee"),
+]
+
+PRICE_CHIPS = [
+    ("dưới 50k", "under 50k"),
+    ("dưới 100k", "under 100k"),
+    ("dưới 200k", "under 200k"),
+]
+
+NEARBY_CHIP = ("gần đây", "near me")
+
+# Below this many candidates the list is already short enough to read, so the
+# chips would be noise rather than help.
+CHIP_THRESHOLD = 25
+
+
+def _missing_slots(intent: Intent) -> list[str]:
+    """Which of the three slots that most shorten a result list are unset."""
+    missing = []
+    if not intent.dishes:
+        missing.append("dish")
+    if not (intent.districts or intent.cities or intent.wants_nearby):
+        missing.append("area")
+    if intent.price_min is None and intent.price_max is None:
+        missing.append("price")
+    return missing
+
+
+def _compose(intent: Intent, dish: str = "", price: str = "", area: str = "") -> str:
+    """A natural query from the known slots plus one new term.
+
+    Written out rather than appending the term to the raw message, so the chip
+    the user taps reads as a sentence they might have typed: "Phở ở Quận 1",
+    not "quán ở Quận 1 Phở".
+    """
+    subject = dish or (intent.dishes[0] if intent.dishes else "quán ăn")
+    parts = [subject]
+
+    where = area or (
+        intent.districts[0]
+        if intent.districts
+        else intent.cities[0] if intent.cities else ""
+    )
+    if where:
+        parts.append(where if where == NEARBY_CHIP[0] else f"ở {where}")
+    elif intent.wants_nearby:
+        parts.append(NEARBY_CHIP[0])
+
+    if price:
+        parts.append(price)
+    elif intent.price_max:
+        parts.append(f"dưới {int(intent.price_max // 1000)}k")
+
+    return " ".join(parts)
+
+
+# Six fits one scrollable row without the user having to drag it.
+MAX_CHIPS = 6
+
+
+def _slot_chips(intent: Intent, lang: str, missing: list[str]) -> list[dict]:
+    """Quick replies for the most useful missing slots."""
+    pick = 0 if lang == "vi" else 1
+    chips: list[dict] = []
+
+    # "gần đây" narrows harder than any dish does, so its place is reserved
+    # before the dishes are laid out rather than left to whatever fits last.
+    wants_nearby_chip = "area" in missing
+    room = MAX_CHIPS - (1 if wants_nearby_chip else 0)
+
+    if "dish" in missing:
+        chips += [
+            {"label": pair[pick], "query": _compose(intent, dish=pair[0])}
+            for pair in DISH_CHIPS[:room]
+        ]
+    elif "price" in missing:
+        chips += [
+            {"label": pair[pick], "query": _compose(intent, price=pair[0])}
+            for pair in PRICE_CHIPS[:room]
+        ]
+
+    if wants_nearby_chip:
+        chips.append(
+            {"label": NEARBY_CHIP[pick], "query": _compose(intent, area=NEARBY_CHIP[0])}
+        )
+
+    return chips[:MAX_CHIPS]
+
+
 # Vague queries where a clarifying question beats a random list.
 CLARIFY_QUESTIONS = {
     "vi": [
@@ -412,11 +520,14 @@ def respond(
 
     # --- too vague to search ---------------------------------------------
     if not intent.has_constraints and _matches_any(text, HUNGRY_CUES):
+        missing = _missing_slots(intent)
         return {
             "reply": random.choice(CLARIFY_QUESTIONS[lang]),
             "results": [],
             "intent": intent.to_dict(),
             "kind": "clarify",
+            "slots_missing": missing,
+            "chips": _slot_chips(intent, lang, missing),
         }
 
     # --- search -----------------------------------------------------------
@@ -496,6 +607,15 @@ def respond(
             else " (That's everything I have, so I've looped back to the top.)"
         )
 
+    # A broad query still gets its results; the chips sit under them so the
+    # user can narrow without being made to answer a question first.
+    missing = _missing_slots(result.intent)
+    chips = (
+        _slot_chips(result.intent, lang, missing)
+        if missing and result.total_before_ranking > CHIP_THRESHOLD
+        else []
+    )
+
     return {
         "reply": reply,
         "results": payloads,
@@ -503,6 +623,8 @@ def respond(
         "kind": "results",
         "total_matches": result.total_before_ranking,
         "relaxed_filters": result.relaxed_filters,
+        "slots_missing": missing,
+        "chips": chips,
     }
 
 
