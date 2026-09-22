@@ -1,10 +1,14 @@
+import os
+
 import requests
 import json
 import time
 import statistics
 
 # --- CẤU HÌNH ---
-API_URL = "http://127.0.0.1:5000/recommend"
+# Override to compare a local build against the deployed one:
+#   AI_EVAL_URL=https://<space>.hf.space python evaluate_search.py
+API_URL = os.getenv("AI_EVAL_URL", "http://127.0.0.1:5000").rstrip("/") + "/recommend"
 
 class Colors:
     HEADER = '\033[95m'

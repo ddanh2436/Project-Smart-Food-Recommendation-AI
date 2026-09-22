@@ -40,8 +40,48 @@ CLASS_TO_DISH: dict[str, str] = {
     "pho": "phở",
 }
 
-# Detections below this are not worth showing the user.
+# Confidence tiers.
+#
+# The model knows five dishes. Anything a user photographs outside that set --
+# com tam, hu tieu, lau, banh xeo, che -- lands somewhere between a weak guess
+# and nothing at all, and the old behaviour for both was the same dead end: an
+# empty response and "khong nhan dien duoc mon an". That is the worst possible
+# answer, because the user cannot tell whether the photo was bad, the dish is
+# unsupported, or the service is broken.
+#
+# So the reply is graded instead:
+#
+#   >= 0.55   confident  name the dish and search for it
+#   >= 0.25   uncertain  name it, say it is a guess, offer alternatives
+#   >= 0.10   group      do not name a dish; say which kind of food it looks
+#                        like and offer the dishes in that group
+#   below     none       offer the popular dishes and ask for a typed name
+#
+# The 0.25 floor is unchanged -- it is still what decides whether a dish gets
+# named -- and the 0.10 tier only reads detections that were already being
+# computed and thrown away.
+CONFIDENT_CONFIDENCE = 0.55
 MIN_CONFIDENCE = 0.25
+WEAK_CONFIDENCE = 0.10
+
+# The five trained classes split cleanly into two kinds of meal, which is a
+# useful thing to say even when the dish itself is not certain.
+DISH_GROUPS: dict[str, str] = {
+    "phở": "soup",
+    "bún": "soup",
+    "bánh mì": "dry",
+    "bột chiên": "dry",
+    "gỏi cuốn": "dry",
+}
+
+# Offered when the model cannot name anything. Vietnamese values, because they
+# are what the search index is built from; the client translates the labels.
+POPULAR_DISHES = ["Phở", "Bún bò", "Cơm tấm", "Bánh mì", "Lẩu", "Cà phê"]
+
+GROUP_DISHES = {
+    "soup": ["Phở", "Bún bò", "Hủ tiếu", "Bún riêu"],
+    "dry": ["Bánh mì", "Cơm tấm", "Gỏi cuốn", "Bột chiên"],
+}
 
 
 class FoodDetector:
@@ -89,8 +129,18 @@ class FoodDetector:
                 self._model = None
                 logger.exception("YOLO failed to load: %s", exc)
 
-    def detect(self, image_bytes: bytes, top_k: int = 3) -> list[dict]:
-        """Return detections ranked by confidence, best first."""
+    def detect(
+        self,
+        image_bytes: bytes,
+        top_k: int = 3,
+        min_confidence: float = MIN_CONFIDENCE,
+    ) -> list[dict]:
+        """Return detections ranked by confidence, best first.
+
+        `min_confidence` is a parameter so the caller can look below the floor
+        that decides whether a dish gets named -- a 0.18 detection is not worth
+        asserting, but it is worth saying "this looks like a noodle soup".
+        """
         if self._model is None and not self._attempted:
             self.load()
         if self._model is None:
@@ -136,7 +186,7 @@ class FoodDetector:
         unique: list[dict] = []
         seen: set[str] = set()
         for detection in detections:
-            if detection["confidence"] < MIN_CONFIDENCE:
+            if detection["confidence"] < min_confidence:
                 continue
             if detection["dish"] in seen:
                 continue
@@ -145,6 +195,65 @@ class FoodDetector:
             if len(unique) >= top_k:
                 break
         return unique
+
+
+def classify(detections: list[dict]) -> dict:
+    """Grade a detection list into one of the four tiers.
+
+    Returns the tier, the dish when there is one, the kind of food it looks
+    like, and the dishes worth offering next. The wording is left to the
+    client, which knows the language the interface is in.
+    """
+    best = detections[0] if detections else None
+
+    if best and best["confidence"] >= CONFIDENT_CONFIDENCE:
+        group = DISH_GROUPS.get(best["dish"])
+        return {
+            "tier": "confident",
+            "dish": best["dish"],
+            "group": group,
+            "suggestions": [],
+        }
+
+    if best and best["confidence"] >= MIN_CONFIDENCE:
+        group = DISH_GROUPS.get(best["dish"])
+        # Alternatives first, then the rest of its group: if the guess is
+        # wrong the neighbouring dish is the likeliest correction.
+        others = [title_case(d["dish"]) for d in detections[1:]]
+        pool = others + GROUP_DISHES.get(group or "", [])
+        return {
+            "tier": "uncertain",
+            "dish": best["dish"],
+            "group": group,
+            "suggestions": _dedupe(pool, exclude=title_case(best["dish"]))[:4],
+        }
+
+    if best and best["confidence"] >= WEAK_CONFIDENCE:
+        group = DISH_GROUPS.get(best["dish"])
+        return {
+            "tier": "group",
+            "dish": None,
+            "group": group,
+            "suggestions": _dedupe(GROUP_DISHES.get(group or "", POPULAR_DISHES))[:4],
+        }
+
+    return {
+        "tier": "none",
+        "dish": None,
+        "group": None,
+        "suggestions": list(POPULAR_DISHES),
+    }
+
+
+def _dedupe(items: list[str], exclude: str = "") -> list[str]:
+    seen, out = set(), []
+    for item in items:
+        key = tu.fold(item)
+        if key in seen or (exclude and key == tu.fold(exclude)):
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
 
 
 def resolve_dish(class_name: str) -> str:

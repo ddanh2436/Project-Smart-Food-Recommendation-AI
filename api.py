@@ -31,6 +31,7 @@ from data_store import store
 from intent import parse_intent
 from search import row_to_payload, search
 from sentiment import analyzer
+import vision
 from vision import detector, title_case
 
 logging.basicConfig(
@@ -372,21 +373,26 @@ async def predict_food(file: UploadFile = File(...)) -> dict:
             413, f"Image larger than {settings.max_upload_mb}MB"
         )
 
-    detections = detector.detect(contents, top_k=3)
-    if not detections:
-        return {
-            "food_name": None,
-            "message": "Không nhận diện được món ăn",
-            "detections": [],
-        }
+    # Read below the naming floor so a weak detection can still say what kind
+    # of food this looks like, instead of the dead end an empty list used to be.
+    detections = detector.detect(
+        contents, top_k=3, min_confidence=vision.WEAK_CONFIDENCE
+    )
+    verdict = vision.classify(detections)
+    named = title_case(verdict["dish"]) if verdict["dish"] else None
 
-    best = detections[0]
     return {
-        # Original contract.
-        "food_name": title_case(best["dish"]),
-        "original_name": best["class_name"],
-        "confidence": best["confidence"],
-        # Additive: lets the client offer "did you mean ...?"
+        # Original contract: `food_name` is None unless a dish is actually
+        # being asserted, which is the two top tiers.
+        "food_name": named,
+        "original_name": detections[0]["class_name"] if detections else None,
+        "confidence": detections[0]["confidence"] if detections else 0.0,
+        # How much to trust it: confident | uncertain | group | none. The
+        # client words the reply, because it knows the interface language.
+        "tier": verdict["tier"],
+        "group": verdict["group"],
+        "suggestions": verdict["suggestions"],
+        # Lets the client offer "did you mean ...?"
         "detections": [
             {
                 "food_name": title_case(item["dish"]),
@@ -394,6 +400,7 @@ async def predict_food(file: UploadFile = File(...)) -> dict:
                 "confidence": item["confidence"],
             }
             for item in detections
+            if item["confidence"] >= vision.MIN_CONFIDENCE
         ],
     }
 
@@ -403,14 +410,28 @@ async def search_by_image(file: UploadFile = File(...)) -> dict:
     """Recognise a dish and return matching restaurants in one round trip."""
     prediction = await predict_food(file)
     dish = prediction.get("food_name")
+
+    # Nothing is searched unless a dish is actually being named. Searching on a
+    # 0.18 guess would hand the user a confident list of the wrong restaurants,
+    # which is worse than saying the photo was not clear enough.
     if not dish:
-        return {"detected_food": None, "scores": [], "detections": []}
+        return {
+            "detected_food": None,
+            "scores": [],
+            "detections": [],
+            "tier": prediction.get("tier", "none"),
+            "group": prediction.get("group"),
+            "suggestions": prediction.get("suggestions", []),
+        }
 
     result = search(dish, limit=10)
     return {
         "detected_food": dish,
         "confidence": prediction.get("confidence"),
         "detections": prediction.get("detections", []),
+        "tier": prediction.get("tier"),
+        "group": prediction.get("group"),
+        "suggestions": prediction.get("suggestions", []),
         "sort_by": result.sort_by,
         "scores": [row_to_payload(row) for _, row in result.rows.iterrows()],
     }
