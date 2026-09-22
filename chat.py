@@ -578,7 +578,7 @@ def respond(
     else:
         exhausted = False
 
-    payloads = [row_to_payload(row) for _, row in rows.iterrows()]
+    payloads = [row_to_payload(row, result.intent) for _, row in rows.iterrows()]
 
     if not payloads:
         template = random.choice(NOT_FOUND_REPLIES[lang])

@@ -655,10 +655,99 @@ def search(
     )
 
 
-def row_to_payload(row: Any) -> dict:
+def explain(row: Any, intent: Intent | None) -> list[dict]:
+    """Why this row is in the answer, as facts rather than sentences.
+
+    Structured on purpose. A reason phrased here would be phrased in one
+    language and would drift from the interface's wording; a reason phrased as
+    {"kind": "rating", "value": 8.4, "count": 22} can be said in either, and
+    cannot claim anything the row does not carry.
+
+    Only what is actually known goes in. No distance without a position, no
+    aspect without enough mentions, no dish unless the query asked for one and
+    this row matched it.
+    """
+    if intent is None:
+        return []
+
+    reasons: list[dict] = []
+    folded_tags = tu.fold(str(row.get("tags", "")))
+
+    for dish in intent.dishes:
+        if tu.fold(dish) in folded_tags or tu.fold(dish) in tu.fold(str(row.get("name", ""))):
+            reasons.append({"kind": "dish", "value": dish})
+            break
+
+    district = str(row.get("district", "") or "")
+    if district and any(tu.fold(d) == tu.fold(district) for d in intent.districts):
+        reasons.append({"kind": "district", "value": district})
+
+    price = float(row.get("price", 0) or 0)
+    if price > 0 and (intent.price_max or intent.price_min):
+        within = (not intent.price_max or price <= intent.price_max) and (
+            not intent.price_min or price >= intent.price_min
+        )
+        if within:
+            reasons.append(
+                {"kind": "price", "value": str(row.get("price_text", "") or "")}
+            )
+
+    rating = float(row.get("rating", 0.0) or 0.0)
+    count = int(row.get("review_count", 0) or 0)
+    if rating > 0 and count > 0:
+        reasons.append({"kind": "rating", "value": round(rating, 1), "count": count})
+
+    distance = float(row.get("distance_km", tu.UNKNOWN_DISTANCE))
+    if distance < tu.UNKNOWN_DISTANCE:
+        reasons.append({"kind": "distance", "value": round(distance, 1)})
+
+    # Only the aspects the query asked about, only with evidence, and only
+    # when the evidence actually supports the request: 43% positive on hygiene
+    # is a caution, not a reason to go, and listing it as both said opposite
+    # things in the same card.
+    for key in intent.aspects:
+        mentions = float(row.get(f"aspect_{key}_n", 0) or 0)
+        ratio = float(row.get(f"aspect_{key}", 0.0) or 0.0)
+        if mentions >= ASPECT_MIN_MENTIONS and ratio >= 0.5:
+            reasons.append({
+                "kind": "aspect",
+                "aspect": key,
+                "value": round(ratio * 100),
+                "count": int(mentions),
+            })
+
+    return reasons
+
+
+def cautions(row: Any, intent: Intent | None) -> list[dict]:
+    """Things worth knowing before going, from the same evidence.
+
+    A recommendation that only lists strengths is an advert. These come from
+    the aspects the query asked about that the reviews do not support, so the
+    warning is as grounded as the reason beside it.
+    """
+    if intent is None:
+        return []
+    out: list[dict] = []
+    for key in list(intent.aspects) + list(intent.aspect_avoid):
+        mentions = float(row.get(f"aspect_{key}_n", 0) or 0)
+        ratio = float(row.get(f"aspect_{key}", 0.0) or 0.0)
+        if mentions >= ASPECT_MIN_MENTIONS and ratio < 0.5:
+            out.append({
+                "kind": "aspect",
+                "aspect": key,
+                "value": round(ratio * 100),
+                "count": int(mentions),
+            })
+    return out
+
+
+def row_to_payload(row: Any, intent: Intent | None = None) -> dict:
     """Serialize one result row for the API response."""
     distance = float(row.get("distance_km", tu.UNKNOWN_DISTANCE))
     return {
+        "reasons": explain(row, intent),
+        "cautions": cautions(row, intent),
         "id": str(row.get("id", "")),
         "name": str(row.get("name", "")),
         "tags": str(row.get("tags", "")),

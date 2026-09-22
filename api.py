@@ -90,6 +90,11 @@ class TasteScore(BaseModel):
     source_url: str = ""
     opening_hours: str = ""
     price_text: str = ""
+    # Why this row is here, and what to know before going, as facts the client
+    # words in its own language. Empty when the query asked for nothing that
+    # could be evidenced.
+    reasons: list[dict[str, Any]] = Field(default_factory=list)
+    cautions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class RecommendResponse(BaseModel):
@@ -285,7 +290,7 @@ async def handle_recommend(request: RecommendRequest) -> dict:
         )
     return {
         "sort_by": result.sort_by,
-        "scores": [row_to_payload(row) for _, row in result.rows.iterrows()],
+        "scores": [row_to_payload(row, result.intent) for _, row in result.rows.iterrows()],
         "total_matches": result.total_before_ranking,
         "intent": result.intent.to_dict(),
         "relaxed_filters": result.relaxed_filters,
@@ -434,7 +439,7 @@ async def search_by_image(file: UploadFile = File(...)) -> dict:
         "group": prediction.get("group"),
         "suggestions": prediction.get("suggestions", []),
         "sort_by": result.sort_by,
-        "scores": [row_to_payload(row) for _, row in result.rows.iterrows()],
+        "scores": [row_to_payload(row, result.intent) for _, row in result.rows.iterrows()],
     }
 
 
