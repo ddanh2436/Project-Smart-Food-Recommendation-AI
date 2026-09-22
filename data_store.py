@@ -53,6 +53,12 @@ FIELD_RENAMES = {
     "diemTrungBinhAdj": "rating_adjusted",
 }
 
+# Aspects precomputed by aspect_index.py. Kept as flat columns rather than a
+# nested dict so the ranker can read them as numpy arrays.
+ASPECT_KEYS = ["food", "price", "service", "space", "hygiene", "parking"]
+ASPECT_RATIO_COLUMNS = [f"aspect_{key}" for key in ASPECT_KEYS]
+ASPECT_COUNT_COLUMNS = [f"aspect_{key}_n" for key in ASPECT_KEYS]
+
 # Columns the ranker relies on, with the default used when absent.
 REQUIRED_COLUMNS: dict[str, Any] = {
     "id": "",
@@ -79,12 +85,6 @@ REQUIRED_COLUMNS: dict[str, Any] = {
     **{name: 0.0 for name in ASPECT_RATIO_COLUMNS},
     **{name: 0.0 for name in ASPECT_COUNT_COLUMNS},
 }
-
-# Aspects precomputed by aspect_index.py. Kept as flat columns rather than a
-# nested dict so the ranker can read them as numpy arrays.
-ASPECT_KEYS = ["food", "price", "service", "space", "hygiene", "parking"]
-ASPECT_RATIO_COLUMNS = [f"aspect_{key}" for key in ASPECT_KEYS]
-ASPECT_COUNT_COLUMNS = [f"aspect_{key}_n" for key in ASPECT_KEYS]
 
 NUMERIC_COLUMNS = [
     "rating", "price", "lat", "lon",
