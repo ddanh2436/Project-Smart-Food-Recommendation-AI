@@ -1,0 +1,297 @@
+{
+  "cases": [
+    {
+      "query": "bún đậu mắm tôm",
+      "expect_any": [
+        "bún đậu",
+        "mắm tôm"
+      ]
+    },
+    {
+      "query": "lẩu gà lá é phú yên",
+      "expect_any": [
+        "lẩu gà",
+        "lá é",
+        "phú yên"
+      ]
+    },
+    {
+      "query": "cơm niêu singapore",
+      "expect_any": [
+        "cơm niêu",
+        "thiên lý",
+        "phương nam"
+      ]
+    },
+    {
+      "query": "bún quậy kiến xây",
+      "expect_any": [
+        "bún quậy",
+        "saigon"
+      ]
+    },
+    {
+      "query": "nem nướng nha trang",
+      "expect_any": [
+        "nem nướng",
+        "nha trang"
+      ]
+    },
+    {
+      "query": "bánh tằm cay cà mau",
+      "expect_any": [
+        "bánh tằm",
+        "cà mau"
+      ]
+    },
+    {
+      "query": "gà nướng cơm lam tây nguyên",
+      "expect_any": [
+        "gà nướng",
+        "cơm lam",
+        "tây nguyên",
+        "bản đôn"
+      ]
+    },
+    {
+      "query": "món ngon hà nội",
+      "expect_any": [
+        "hà nội",
+        "món bắc",
+        "bún chả",
+        "phở"
+      ]
+    },
+    {
+      "query": "đặc sản huế",
+      "expect_any": [
+        "huế",
+        "cố đô"
+      ]
+    },
+    {
+      "query": "món ăn miền tây dân dã",
+      "expect_any": [
+        "miền tây",
+        "bún mắm",
+        "bánh xèo",
+        "cà mau"
+      ]
+    },
+    {
+      "query": "ẩm thực tây bắc",
+      "expect_any": [
+        "tây bắc",
+        "mẹt",
+        "heo quay"
+      ]
+    },
+    {
+      "query": "quán ăn ngon quận 4",
+      "expect_any": [
+        "quận 4",
+        "bún mắm",
+        "ốc",
+        "phở"
+      ]
+    },
+    {
+      "query": "nhà hàng thảo điền quận 2",
+      "expect_any": [
+        "thảo điền",
+        "quận 2",
+        "sang trọng"
+      ]
+    },
+    {
+      "query": "ăn uống khu phan xích long",
+      "expect_any": [
+        "hoa phượng",
+        "hoa lan",
+        "phú nhuận"
+      ]
+    },
+    {
+      "query": "quán nhậu có máy lạnh",
+      "expect_any": [
+        "nhậu",
+        "máy lạnh",
+        "lẩu",
+        "nướng"
+      ]
+    },
+    {
+      "query": "ăn sáng món nước",
+      "expect_any": [
+        "phở",
+        "hủ tiếu",
+        "bún",
+        "ăn sáng"
+      ]
+    },
+    {
+      "query": "ăn đêm vỉa hè",
+      "expect_any": [
+        "ăn đêm",
+        "vỉa hè",
+        "cháo",
+        "ốc"
+      ]
+    },
+    {
+      "query": "nhà hàng sang trọng tiếp khách",
+      "expect_any": [
+        "sang trọng",
+        "tiếp khách",
+        "doanh nhân"
+      ]
+    },
+    {
+      "query": "bún bò sụn",
+      "expect_any": [
+        "bún bò",
+        "sụn"
+      ]
+    },
+    {
+      "query": "heo quay tây bắc",
+      "expect_any": [
+        "heo quay",
+        "tây bắc"
+      ]
+    },
+    {
+      "query": "cháo lòng",
+      "expect_any": [
+        "cháo lòng",
+        "dồi"
+      ]
+    },
+    {
+      "query": "nui xào bò",
+      "expect_any": [
+        "nui xào",
+        "cô hai"
+      ]
+    },
+    {
+      "query": "Phở Thìn Lò Đúc",
+      "expect_top1": [
+        "phở thìn"
+      ],
+      "intent": {
+        "name_like": true
+      },
+      "note": "Raising the rating weight globally once turned this into 'Phở Cần Thơ'. Name search must beat the quality prior."
+    },
+    {
+      "query": "phở",
+      "expect_any": [
+        "phở"
+      ],
+      "note": "A bare dish name used to lead with a 5.0-rated place whose name is mostly the word itself."
+    },
+    {
+      "query": "zzzqqq",
+      "expect_empty": true,
+      "note": "Nonsense once returned the whole database ranked by rating, because the relevance floor sat inside the TF-IDF noise band."
+    },
+    {
+      "query": "qwertyuiop",
+      "expect_empty": true,
+      "note": "As above."
+    },
+    {
+      "query": "lẩu dưới 200k",
+      "expect_any": [
+        "lẩu"
+      ],
+      "intent": {
+        "price_max": 200000.0,
+        "dishes": [
+          "lẩu"
+        ]
+      },
+      "note": "Price parsing."
+    },
+    {
+      "query": "quán phở trên 8 điểm",
+      "expect_any": [
+        "phở"
+      ],
+      "intent": {
+        "min_rating": 8.0,
+        "price_max": null
+      },
+      "note": "Rating is parsed before price; otherwise 'trên 8 điểm' was read as a price of 8 dong."
+    },
+    {
+      "query": "hải sản nhưng không cay",
+      "expect_any": [
+        "hải sản",
+        "ốc"
+      ],
+      "intent": {
+        "exclude": [
+          "cay"
+        ]
+      },
+      "note": "Negation has a window: 'hải sản' must survive it."
+    },
+    {
+      "query": "cơm tấm ở Quận 1 dưới 100k",
+      "expect_any": [
+        "cơm tấm"
+      ],
+      "intent": {
+        "dishes": [
+          "cơm tấm"
+        ],
+        "districts": [
+          "Quận 1"
+        ],
+        "price_max": 100000.0
+      },
+      "note": "All three slots in one query."
+    },
+    {
+      "query": "quán ăn sạch sẽ",
+      "intent": {
+        "aspects": [
+          "hygiene"
+        ]
+      },
+      "note": "Aspect search reads the review verdicts, not the tag string."
+    },
+    {
+      "query": "quán ăn ngon nhưng đừng bị chê phục vụ",
+      "intent": {
+        "aspect_avoid": [
+          "service"
+        ]
+      },
+      "note": "Avoidance is a penalty, not a request for praise."
+    },
+    {
+      "query": "quán không sạch sẽ",
+      "intent": {
+        "aspects": []
+      },
+      "note": "A negated aspect cue is dropped, never inverted."
+    },
+    {
+      "query": "bún",
+      "min_distinct_dishes": 4,
+      "note": "Diversity: the top used to be four bún chả places in a row."
+    },
+    {
+      "query": "quận 12",
+      "intent": {
+        "districts": [
+          "Quận 12"
+        ]
+      },
+      "note": "Longest alias first, so 'quận 12' is not read as 'quận 1'."
+    }
+  ]
+}
