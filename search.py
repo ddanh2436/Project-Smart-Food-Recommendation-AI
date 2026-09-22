@@ -318,8 +318,9 @@ def _relevance(
     content = scores.copy()
 
     # --- quality prior, normalized to 0..1.
-    # Uses the shrunk rating (see data_store.RATING_CONFIDENCE): the raw value
-    # would let a 10.0 backed by a single review outrank a well-reviewed 7.9.
+    # Uses the shrunk rating the backend computed (see the shrinkage note in
+    # data_store): the raw value would let a 10.0 backed by a single review
+    # outrank a well-reviewed 7.9.
     #
     # Weight depends on whether the category is already settled. Once the dish
     # filter has matched, every candidate is relevant and quality decides;
