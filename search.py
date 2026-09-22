@@ -79,6 +79,35 @@ W_ASPECT = 1.6
 # is a veto on the worst offenders and should mostly leave the rest alone.
 W_ASPECT_AVOID = 1.2
 
+# --------------------------------------------------------------------------
+# Diversity
+#
+# Ranking purely on score produces lists like
+#
+#     Phở — Quận 1 — 9.3
+#     Phở — Quận 1 — 9.2
+#     Phở — Quận 1 — 9.2
+#     Phở — Quận 1 — 9.1
+#
+# which is four ways of saying the same thing. Somebody scanning a result list
+# is choosing, and four near-identical options is a worse set to choose from
+# than three of those plus something different, even if the fourth scores a
+# little lower.
+#
+# So the top of the list is re-picked greedily: at each step take the row with
+# the best score minus a penalty for how much it repeats what has already been
+# taken. The penalty is capped well below the score range, so a genuinely
+# better restaurant still wins -- this breaks up ties and near-ties, it does
+# not overrule real differences.
+DIVERSITY_PENALTY = 0.55
+
+# Beyond this depth nobody is comparing rows side by side any more.
+DIVERSITY_DEPTH = 12
+
+# What counts as "the same kind of thing", and how much each repeat costs.
+SAME_DISH_COST = 0.55
+SAME_DISTRICT_COST = 0.30
+
 # Fewer mentions than this is not evidence. A restaurant below the bar scores
 # zero for that aspect -- not negative -- because "nobody mentioned the
 # parking" and "the parking is bad" are different claims, and only one of them
@@ -427,6 +456,77 @@ def _order(frame: pd.DataFrame, intent: Intent) -> pd.DataFrame:
     )
 
 
+# The dish vocabulary, longest first, folded once. Used to read a dish out of
+# a restaurant's tags: the tags arrive space-joined, so the individual tags
+# cannot be recovered by splitting, but they can be recognised.
+_DISH_TAGS_FOLDED = sorted(
+    ((tu.fold(tag), tag) for tag in kb.DISH_TAGS),
+    key=lambda pair: len(pair[0]),
+    reverse=True,
+)
+
+
+def _primary_dish(tags_text: str) -> str:
+    """The dish a restaurant's tags name, or "" when none of them do."""
+    folded = tu.fold(str(tags_text or ""))
+    if not folded:
+        return ""
+    for needle, _original in _DISH_TAGS_FOLDED:
+        if needle and needle in folded:
+            return needle
+    return ""
+
+
+def _diversify(frame: pd.DataFrame, intent: Intent) -> pd.DataFrame:
+    """Re-pick the head of the list so it is not four of the same thing.
+
+    Skipped when the user asked for a particular ordering, because distance,
+    price and rating orders are instructions and reshuffling them would ignore
+    what was asked. Skipped for name-like queries too: searching a restaurant by
+    name should return it and its near-twins, which is exactly the redundancy
+    this would otherwise break up.
+    """
+    if intent.sort_by != "relevance" or intent.name_like:
+        return frame
+    depth = min(DIVERSITY_DEPTH, len(frame))
+    if depth < 3:
+        return frame
+
+    head = frame.head(depth)
+    scores = head["relevance"].to_numpy(dtype="float64")
+    dishes = [_primary_dish(text) for text in head["tags"]]
+    districts = [tu.fold(str(value or "")) for value in head["district"]]
+
+    chosen: list[int] = []
+    remaining = set(range(depth))
+    seen_dishes: dict[str, int] = {}
+    seen_districts: dict[str, int] = {}
+
+    while remaining:
+        best_index, best_value = None, None
+        for index in remaining:
+            penalty = 0.0
+            if dishes[index]:
+                penalty += SAME_DISH_COST * seen_dishes.get(dishes[index], 0)
+            if districts[index]:
+                penalty += SAME_DISTRICT_COST * seen_districts.get(
+                    districts[index], 0
+                )
+            value = scores[index] - min(penalty, DIVERSITY_PENALTY)
+            if best_value is None or value > best_value:
+                best_index, best_value = index, value
+        chosen.append(best_index)
+        remaining.discard(best_index)
+        if dishes[best_index]:
+            seen_dishes[dishes[best_index]] = seen_dishes.get(dishes[best_index], 0) + 1
+        if districts[best_index]:
+            seen_districts[districts[best_index]] = (
+                seen_districts.get(districts[best_index], 0) + 1
+            )
+
+    return pd.concat([head.iloc[chosen], frame.iloc[depth:]])
+
+
 def search(
     query: str,
     user_gps: list[float] | None = None,
@@ -546,6 +646,7 @@ def search(
                 return SearchResult(intent, working, 0, relaxed)
 
     working = _order(working, intent)
+    working = _diversify(working, intent)
 
     # --- 3. truncate -----------------------------------------------------
     cap = limit or settings.max_results
