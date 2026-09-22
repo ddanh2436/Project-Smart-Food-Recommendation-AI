@@ -25,12 +25,14 @@ from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field, field_validator
 
 import chat as chat_engine
+import aspect_index
 import review_insights
 from config import settings
 from data_store import store
 from intent import parse_intent
 from search import row_to_payload, search
 from sentiment import analyzer
+import vision
 from vision import detector, title_case
 
 logging.basicConfig(
@@ -88,6 +90,11 @@ class TasteScore(BaseModel):
     source_url: str = ""
     opening_hours: str = ""
     price_text: str = ""
+    # Why this row is here, and what to know before going, as facts the client
+    # words in its own language. Empty when the query asked for nothing that
+    # could be evidenced.
+    reasons: list[dict[str, Any]] = Field(default_factory=list)
+    cautions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class RecommendResponse(BaseModel):
@@ -143,6 +150,13 @@ class ChatRequest(BaseModel):
     )
 
 
+class ChatChip(BaseModel):
+    """A quick reply. `label` is shown, `query` is what gets sent."""
+
+    label: str
+    query: str
+
+
 class ChatResponse(BaseModel):
     reply: str
     results: list[TasteScore] = Field(default_factory=list)
@@ -150,6 +164,10 @@ class ChatResponse(BaseModel):
     intent: dict[str, Any] | None = None
     total_matches: int = 0
     relaxed_filters: list[str] = Field(default_factory=list)
+    # Which of dish / area / price the query left unset, and the chips that
+    # fill them. Empty once the query is specific enough to stand on its own.
+    slots_missing: list[str] = Field(default_factory=list)
+    chips: list[ChatChip] = Field(default_factory=list)
     # Kept so any older client reading `reply_text` keeps working.
     reply_text: str = ""
 
@@ -272,7 +290,7 @@ async def handle_recommend(request: RecommendRequest) -> dict:
         )
     return {
         "sort_by": result.sort_by,
-        "scores": [row_to_payload(row) for _, row in result.rows.iterrows()],
+        "scores": [row_to_payload(row, result.intent) for _, row in result.rows.iterrows()],
         "total_matches": result.total_before_ranking,
         "intent": result.intent.to_dict(),
         "relaxed_filters": result.relaxed_filters,
@@ -361,21 +379,26 @@ async def predict_food(file: UploadFile = File(...)) -> dict:
             413, f"Image larger than {settings.max_upload_mb}MB"
         )
 
-    detections = detector.detect(contents, top_k=3)
-    if not detections:
-        return {
-            "food_name": None,
-            "message": "Không nhận diện được món ăn",
-            "detections": [],
-        }
+    # Read below the naming floor so a weak detection can still say what kind
+    # of food this looks like, instead of the dead end an empty list used to be.
+    detections = detector.detect(
+        contents, top_k=3, min_confidence=vision.WEAK_CONFIDENCE
+    )
+    verdict = vision.classify(detections)
+    named = title_case(verdict["dish"]) if verdict["dish"] else None
 
-    best = detections[0]
     return {
-        # Original contract.
-        "food_name": title_case(best["dish"]),
-        "original_name": best["class_name"],
-        "confidence": best["confidence"],
-        # Additive: lets the client offer "did you mean ...?"
+        # Original contract: `food_name` is None unless a dish is actually
+        # being asserted, which is the two top tiers.
+        "food_name": named,
+        "original_name": detections[0]["class_name"] if detections else None,
+        "confidence": detections[0]["confidence"] if detections else 0.0,
+        # How much to trust it: confident | uncertain | group | none. The
+        # client words the reply, because it knows the interface language.
+        "tier": verdict["tier"],
+        "group": verdict["group"],
+        "suggestions": verdict["suggestions"],
+        # Lets the client offer "did you mean ...?"
         "detections": [
             {
                 "food_name": title_case(item["dish"]),
@@ -383,6 +406,7 @@ async def predict_food(file: UploadFile = File(...)) -> dict:
                 "confidence": item["confidence"],
             }
             for item in detections
+            if item["confidence"] >= vision.MIN_CONFIDENCE
         ],
     }
 
@@ -392,22 +416,53 @@ async def search_by_image(file: UploadFile = File(...)) -> dict:
     """Recognise a dish and return matching restaurants in one round trip."""
     prediction = await predict_food(file)
     dish = prediction.get("food_name")
+
+    # Nothing is searched unless a dish is actually being named. Searching on a
+    # 0.18 guess would hand the user a confident list of the wrong restaurants,
+    # which is worse than saying the photo was not clear enough.
     if not dish:
-        return {"detected_food": None, "scores": [], "detections": []}
+        return {
+            "detected_food": None,
+            "scores": [],
+            "detections": [],
+            "tier": prediction.get("tier", "none"),
+            "group": prediction.get("group"),
+            "suggestions": prediction.get("suggestions", []),
+        }
 
     result = search(dish, limit=10)
     return {
         "detected_food": dish,
         "confidence": prediction.get("confidence"),
         "detections": prediction.get("detections", []),
+        "tier": prediction.get("tier"),
+        "group": prediction.get("group"),
+        "suggestions": prediction.get("suggestions", []),
         "sort_by": result.sort_by,
-        "scores": [row_to_payload(row) for _, row in result.rows.iterrows()],
+        "scores": [row_to_payload(row, result.intent) for _, row in result.rows.iterrows()],
     }
 
 
 # ==========================================================================
 # Admin
 # ==========================================================================
+@app.post("/admin/aspect-index", dependencies=[Depends(require_admin)])
+async def admin_aspect_index(limit: int = 200, force: bool = False) -> dict:
+    """Precompute the per-aspect review verdicts used for aspect search.
+
+    Batched on purpose: the full pass runs the sentiment model over every
+    review and takes hours on a free CPU. Call it repeatedly until `remaining`
+    reaches zero. Most-reviewed restaurants are indexed first, so stopping part
+    way still covers the places search actually surfaces.
+    """
+    return aspect_index.build(limit=limit, force=force)
+
+
+@app.get("/admin/aspect-index", dependencies=[Depends(require_admin)])
+async def admin_aspect_index_status() -> dict:
+    return aspect_index.status()
+
+
 @app.post("/admin/reload", dependencies=[Depends(require_admin)])
 async def admin_reload() -> dict:
     """Re-read the restaurant collection and rebuild the search indexes."""

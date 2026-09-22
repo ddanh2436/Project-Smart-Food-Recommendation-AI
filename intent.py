@@ -99,6 +99,75 @@ _OPEN_NOW_CUES = [
 
 # Filler words that carry no search signal. Stripped from the leftover text so
 # ``free_text`` holds only genuinely unrecognised content (usually a name).
+# ---------------------------------------------------------------------------
+# Aspect cues
+#
+# These map a phrase to one of the six aspects that aspect_index.py scores from
+# real reviews. Before this, "quán ăn sạch sẽ" could only be answered by
+# matching the literal string against the tag list -- which finds the 620 places
+# a crawler happened to tag "Sạch sẽ" and misses every place whose reviewers
+# said it was spotless. Matching the aspect instead answers from evidence.
+#
+# Diacritics are kept: folding conflates "chỗ" with "chờ" and "tiền" with
+# "tiện", which would put complaints about waiting into the parking bucket.
+# ---------------------------------------------------------------------------
+ASPECT_CUES: dict[str, list[str]] = {
+    "hygiene": [
+        "sạch sẽ", "vệ sinh", "sạch", "gọn gàng", "clean", "hygiene",
+    ],
+    "service": [
+        "phục vụ tốt", "phục vụ nhanh", "phục vụ nhiệt tình", "nhân viên thân thiện",
+        "phục vụ chu đáo", "thái độ tốt", "good service", "friendly staff",
+    ],
+    "parking": [
+        "chỗ đậu xe", "chỗ để xe", "chỗ gửi xe", "bãi đậu xe", "bãi xe",
+        "đậu ô tô", "đỗ ô tô", "parking",
+    ],
+    "space": [
+        "không gian đẹp", "không gian thoáng", "view đẹp", "quán đẹp",
+        "decor đẹp", "yên tĩnh", "nice space", "good view",
+    ],
+    "food": [
+        "đồ ăn ngon", "món ăn ngon", "đồ ăn tươi", "nấu ngon", "tasty food",
+    ],
+    "price": [
+        "giá hợp lý", "giá tốt", "đáng tiền", "giá mềm", "good value",
+    ],
+}
+
+# The plain noun for each aspect, used by the avoidance patterns below. The
+# cue lists above are phrases that already imply "and it should be good"; these
+# are the bare nouns, which only mean something once a marker says which way.
+ASPECT_NOUNS: dict[str, list[str]] = {
+    "hygiene": ["vệ sinh", "sạch sẽ", "hygiene", "cleanliness"],
+    "service": ["phục vụ", "nhân viên", "thái độ", "service", "staff"],
+    "parking": ["chỗ đậu xe", "chỗ để xe", "bãi xe", "gửi xe", "parking"],
+    "space": ["không gian", "quán", "view", "decor", "space", "ambience"],
+    "food": ["món ăn", "đồ ăn", "thức ăn", "food"],
+    "price": ["giá cả", "giá", "price"],
+}
+
+# "đừng bị chê phục vụ" is a different request from "phục vụ tốt": it does not
+# ask for praise, it asks to avoid complaints. Ranking them the same way would
+# push a place with no reviews about service above one that is well reviewed,
+# which is not what was asked.
+AVOID_MARKERS = [
+    "đừng bị chê", "không bị chê", "tránh bị chê", "đừng chê", "không chê",
+    "không bị phàn nàn", "tránh phàn nàn", "đừng phàn nàn",
+    "không muốn bị chê", "đừng có chê",
+    "not complained about", "no complaints about", "avoid complaints about",
+]
+
+# How far after a marker the aspect noun may sit, so "đừng bị chê phục vụ" is
+# caught while "đừng bị chê, mà phục vụ thì tuỳ" is not.
+AVOID_WINDOW = 24
+
+ASPECT_CUES_SORTED = sorted(
+    ((cue, key) for key, cues in ASPECT_CUES.items() for cue in cues),
+    key=lambda pair: len(pair[0]),
+    reverse=True,
+)
+
 STOPWORDS = [
     # Vietnamese
     "quán", "tiệm", "nhà hàng", "hàng", "chỗ", "địa điểm", "khu vực", "khu",
@@ -166,6 +235,13 @@ class Intent:
     free_text: str = ""
     # True when the query looks like a restaurant name rather than a dish.
     name_like: bool = False
+    # Aspects the user asked to be good: food | price | service | space |
+    # hygiene | parking. Ranked on, never filtered on, because a restaurant
+    # without enough mentions has no evidence either way rather than a bad one.
+    aspects: list[str] = field(default_factory=list)
+    # Aspects the user asked not to be complained about. Penalised rather than
+    # boosted: "đừng bị chê phục vụ" is not a request for praised service.
+    aspect_avoid: list[str] = field(default_factory=list)
 
     @property
     def has_constraints(self) -> bool:
@@ -178,6 +254,8 @@ class Intent:
             or self.price_max
             or self.min_rating
             or self.exclude
+            or self.aspects
+            or self.aspect_avoid
         )
 
     @property
@@ -206,6 +284,8 @@ class Intent:
             "sort_by": self.sort_by,
             "free_text": self.free_text,
             "name_like": self.name_like,
+            "aspects": self.aspects,
+            "aspect_avoid": self.aspect_avoid,
         }
 
 
@@ -310,6 +390,23 @@ def _cut(text: str, match: re.Match[str]) -> str:
     return f"{text[: match.start()]} {text[match.end():]}"
 
 
+def _avoided_aspects(text: str) -> list[str]:
+    """Aspects the user asked not to be complained about."""
+    found: list[str] = []
+    for marker in AVOID_MARKERS:
+        for match in re.finditer(re.escape(marker), text, re.IGNORECASE):
+            window = text[match.end() : match.end() + AVOID_WINDOW]
+            for key, nouns in ASPECT_NOUNS.items():
+                if key in found:
+                    continue
+                if any(
+                    re.search(rf"(?<!\w){re.escape(noun)}(?!\w)", window, re.I)
+                    for noun in nouns
+                ):
+                    found.append(key)
+    return found
+
+
 def parse_intent(query: str, has_gps: bool = False) -> Intent:
     """Turn a free-text query into an :class:`Intent`.
 
@@ -355,6 +452,29 @@ def parse_intent(query: str, has_gps: bool = False) -> Intent:
 
     # 4. Negation spans, computed on the full text for correct positions.
     negations = _negated_spans(translated)
+
+    # 4b. Aspect cues, longest phrase first. Read before tags so "sạch sẽ" is
+    #     taken as a request for a clean place rather than only as the tag some
+    #     crawler happened to apply. A negated cue is dropped rather than
+    #     inverted: "không sạch sẽ" is not a request for a dirty restaurant.
+    for cue, key in ASPECT_CUES_SORTED:
+        pattern = rf"(?<!\w){re.escape(cue)}(?!\w)"
+        if not re.search(pattern, stripped, re.IGNORECASE):
+            continue
+        if _is_negated(translated, cue, negations):
+            continue
+        if key not in intent.aspects:
+            intent.aspects.append(key)
+
+    # 4c. Aspects to avoid complaints about. Checked on the full text, because
+    #     the marker and the noun can straddle wording other rules consumed.
+    for key in _avoided_aspects(translated):
+        if key not in intent.aspect_avoid:
+            intent.aspect_avoid.append(key)
+        # A "do not be criticised for X" cancels a "X should be good" read off
+        # the same words, so the two never fight each other in the ranker.
+        if key in intent.aspects:
+            intent.aspects.remove(key)
 
     # 5. Places. Longest alias first so "quận 12" beats "quận 1".
     remaining = stripped

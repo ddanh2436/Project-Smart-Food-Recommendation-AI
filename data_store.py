@@ -47,7 +47,17 @@ FIELD_RENAMES = {
     "diemChatLuong": "score_quality",
     "diemPhucVu": "score_service",
     "diemGiaCa": "score_price",
+    # Computed and stored by the backend (rating-stats.service.ts). Reading
+    # them here is what keeps the chatbot's ordering identical to the website's.
+    "reviewCount": "review_count",
+    "diemTrungBinhAdj": "rating_adjusted",
 }
+
+# Aspects precomputed by aspect_index.py. Kept as flat columns rather than a
+# nested dict so the ranker can read them as numpy arrays.
+ASPECT_KEYS = ["food", "price", "service", "space", "hygiene", "parking"]
+ASPECT_RATIO_COLUMNS = [f"aspect_{key}" for key in ASPECT_KEYS]
+ASPECT_COUNT_COLUMNS = [f"aspect_{key}_n" for key in ASPECT_KEYS]
 
 # Columns the ranker relies on, with the default used when absent.
 REQUIRED_COLUMNS: dict[str, Any] = {
@@ -72,6 +82,8 @@ REQUIRED_COLUMNS: dict[str, Any] = {
     "score_price": 0.0,
     "review_count": 0.0,
     "rating_adjusted": 0.0,
+    **{name: 0.0 for name in ASPECT_RATIO_COLUMNS},
+    **{name: 0.0 for name in ASPECT_COUNT_COLUMNS},
 }
 
 NUMERIC_COLUMNS = [
@@ -79,10 +91,10 @@ NUMERIC_COLUMNS = [
     "score_space", "score_location", "score_quality",
     "score_service", "score_price",
     "review_count", "rating_adjusted",
+    *ASPECT_RATIO_COLUMNS, *ASPECT_COUNT_COLUMNS,
 ]
-
 # --------------------------------------------------------------------------
-# Rating shrinkage.
+# Rating shrinkage
 #
 # The raw rating is not comparable across restaurants, because the best-rated
 # ones are also the least reviewed. Measured on the live data:
@@ -95,28 +107,21 @@ NUMERIC_COLUMNS = [
 # Ranking on the raw number therefore promotes noise: a search for pho in Hanoi
 # put a 10.0-rated fried-rice place above well-reviewed pho specialists.
 #
-# The fix is the standard Bayesian shrinkage toward the global mean:
+# The fix is the standard Bayesian shrinkage toward the global mean,
 #
 #     adjusted = (C * m + n * R) / (C + n)
 #
-# with n reviews, raw rating R, global mean m (7.33 here) and a confidence
-# constant C -- the review count at which a rating is believed halfway.
-#
-# C = 5 is chosen for the *measured* shape of this data, which is thin: median
-# 3 reviews, mean 5, p90 of 10 and a maximum of 36, because the crawler capped
-# reviews per restaurant. On a 10.0-rated place that gives:
-#
-#      1 review  -> 7.77   (essentially "no evidence", parked at the mean)
-#      5 reviews -> 8.67
-#     10 reviews -> 9.11   (near the top of what this data ever supports)
-#
-# So a single enthusiastic review no longer outranks a place with ten good
-# ones, while a genuinely well-reviewed favourite keeps almost all its score.
+# and it is computed ONCE, by the backend, in rating-stats.service.ts. This
+# module used to carry a second implementation of the same formula, with its
+# own copy of the constants and its own global mean taken from its own
+# snapshot. Two implementations of one ranking rule is a standing bug: the
+# website ordered results by the backend's numbers while the assistant ordered
+# them by its own, and a change to either one silently put the two out of step.
+# The value is read from `diemTrungBinhAdj` now, and the review count from
+# `reviewCount`, both already on the document.
 #
 # Only ranking uses the adjusted value; the raw rating is what gets displayed,
 # so the UI never shows a number that contradicts the order.
-RATING_CONFIDENCE = 5.0
-FALLBACK_MEAN_RATING = 7.33
 
 
 def _empty_frame() -> pd.DataFrame:
@@ -256,22 +261,8 @@ class RestaurantStore:
             )
             database = client[settings.db_name]
             documents = list(database[settings.collection_name].find({}))
-
-            # Review counts, for the rating shrinkage described above. Done as
-            # a server-side aggregation so only one small row per restaurant
-            # crosses the wire, not 27k review bodies.
-            review_counts: dict[str, int] = {}
-            try:
-                for row in database[settings.reviews_collection].aggregate(
-                    [{"$group": {"_id": "$urlGoc", "n": {"$sum": 1}}}]
-                ):
-                    if row.get("_id"):
-                        review_counts[str(row["_id"])] = int(row.get("n", 0))
-            except Exception as exc:  # noqa: BLE001 - ranking still works
-                logger.warning(
-                    "Could not read review counts, ratings will not be "
-                    "shrunk toward the mean: %s", exc
-                )
+            # No second pass over the reviews collection: `reviewCount` is
+            # already on each restaurant document, maintained by the backend.
             client.close()
         except Exception as exc:  # noqa: BLE001 - surfaced via /health
             message = f"MongoDB read failed: {exc}"
@@ -285,11 +276,9 @@ class RestaurantStore:
             )
             return _empty_frame(), None
 
-        return self._normalize(documents, review_counts), None
+        return self._normalize(documents), None
 
-    def _normalize(
-        self, documents: list[dict], review_counts: dict[str, int] | None = None
-    ) -> pd.DataFrame:
+    def _normalize(self, documents: list[dict]) -> pd.DataFrame:
         frame = pd.DataFrame(documents)
         frame["id"] = frame["_id"].astype(str)
         frame = frame.rename(columns=FIELD_RENAMES)
@@ -311,21 +300,36 @@ class RestaurantStore:
         for column in NUMERIC_COLUMNS:
             frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
 
-        # Review counts and the shrunk rating used for ranking.
-        counts = review_counts or {}
-        frame["review_count"] = [
-            float(counts.get(str(url), 0)) for url in frame["source_url"]
-        ]
-        rated = frame.loc[frame["rating"] > 0, "rating"]
-        mean_rating = float(rated.mean()) if len(rated) else FALLBACK_MEAN_RATING
-        n = frame["review_count"].to_numpy(dtype="float64")
-        r = frame["rating"].to_numpy(dtype="float64")
-        frame["rating_adjusted"] = (
-            (RATING_CONFIDENCE * mean_rating + n * r) / (RATING_CONFIDENCE + n)
+        # `rating_adjusted` and `review_count` arrive on the documents; see the
+        # shrinkage note above. If the backend has never run its rating pass the
+        # column is all zeros, and ranking on that would order every restaurant
+        # identically -- so fall back to the raw rating and say so in the log.
+        if float(frame["rating_adjusted"].max() or 0.0) <= 0.0:
+            logger.warning(
+                "No diemTrungBinhAdj on any document: run the backend's rating "
+                "pass (POST /restaurants/admin/rating-stats). Ranking falls "
+                "back to the raw rating until then."
+            )
+            frame["rating_adjusted"] = frame["rating"]
+
+        # Unpack the precomputed aspect verdicts. A restaurant without them
+        # simply scores zero on every aspect, which the ranker reads as "no
+        # evidence" -- so a partial index degrades instead of breaking.
+        raw_aspects = (
+            frame["aspects"] if "aspects" in frame.columns else pd.Series([None] * len(frame))
         )
-        # A restaurant with no rating at all stays at zero rather than being
-        # pulled up to the global mean.
-        frame.loc[frame["rating"] <= 0, "rating_adjusted"] = 0.0
+        for key in ASPECT_KEYS:
+            ratios, mentions = [], []
+            for value in raw_aspects:
+                entry = value.get(key) if isinstance(value, dict) else None
+                if isinstance(entry, dict):
+                    ratios.append(float(entry.get("positive_ratio") or 0.0))
+                    mentions.append(float(entry.get("mentions") or 0.0))
+                else:
+                    ratios.append(0.0)
+                    mentions.append(0.0)
+            frame[f"aspect_{key}"] = ratios
+            frame[f"aspect_{key}_n"] = mentions
 
         frame["district"] = frame["address"].apply(extract_district)
         frame["city"] = [

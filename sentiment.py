@@ -66,12 +66,32 @@ class SentimentAnalyzer:
             try:
                 from transformers import pipeline
 
-                logger.info("Loading sentiment model %s", settings.sentiment_model)
+                # Use a GPU when there is one. The Space has none, so this
+                # changes nothing there -- but the aspect index is a pass over
+                # every review in the database, which is hours on a CPU and
+                # minutes on the free GPU a Colab or Kaggle notebook gives you.
+                # Without this the pipeline defaults to CPU even on a machine
+                # with CUDA sitting idle.
+                device = -1
+                try:
+                    import torch
+
+                    if torch.cuda.is_available():
+                        device = 0
+                except ImportError:  # pragma: no cover
+                    pass
+
+                logger.info(
+                    "Loading sentiment model %s on %s",
+                    settings.sentiment_model,
+                    "GPU" if device == 0 else "CPU",
+                )
                 self._pipeline = pipeline(
                     "sentiment-analysis",
                     model=settings.sentiment_model,
                     truncation=True,
                     max_length=256,
+                    device=device,
                 )
                 self._error = None
                 logger.info("Sentiment model ready")
