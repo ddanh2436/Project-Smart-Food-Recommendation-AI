@@ -99,6 +99,48 @@ _OPEN_NOW_CUES = [
 
 # Filler words that carry no search signal. Stripped from the leftover text so
 # ``free_text`` holds only genuinely unrecognised content (usually a name).
+# ---------------------------------------------------------------------------
+# Aspect cues
+#
+# These map a phrase to one of the six aspects that aspect_index.py scores from
+# real reviews. Before this, "quán ăn sạch sẽ" could only be answered by
+# matching the literal string against the tag list -- which finds the 620 places
+# a crawler happened to tag "Sạch sẽ" and misses every place whose reviewers
+# said it was spotless. Matching the aspect instead answers from evidence.
+#
+# Diacritics are kept: folding conflates "chỗ" with "chờ" and "tiền" with
+# "tiện", which would put complaints about waiting into the parking bucket.
+# ---------------------------------------------------------------------------
+ASPECT_CUES: dict[str, list[str]] = {
+    "hygiene": [
+        "sạch sẽ", "vệ sinh", "sạch", "gọn gàng", "clean", "hygiene",
+    ],
+    "service": [
+        "phục vụ tốt", "phục vụ nhanh", "phục vụ nhiệt tình", "nhân viên thân thiện",
+        "phục vụ chu đáo", "thái độ tốt", "good service", "friendly staff",
+    ],
+    "parking": [
+        "chỗ đậu xe", "chỗ để xe", "chỗ gửi xe", "bãi đậu xe", "bãi xe",
+        "đậu ô tô", "đỗ ô tô", "parking",
+    ],
+    "space": [
+        "không gian đẹp", "không gian thoáng", "view đẹp", "quán đẹp",
+        "decor đẹp", "yên tĩnh", "nice space", "good view",
+    ],
+    "food": [
+        "đồ ăn ngon", "món ăn ngon", "đồ ăn tươi", "nấu ngon", "tasty food",
+    ],
+    "price": [
+        "giá hợp lý", "giá tốt", "đáng tiền", "giá mềm", "good value",
+    ],
+}
+
+ASPECT_CUES_SORTED = sorted(
+    ((cue, key) for key, cues in ASPECT_CUES.items() for cue in cues),
+    key=lambda pair: len(pair[0]),
+    reverse=True,
+)
+
 STOPWORDS = [
     # Vietnamese
     "quán", "tiệm", "nhà hàng", "hàng", "chỗ", "địa điểm", "khu vực", "khu",
@@ -166,6 +208,10 @@ class Intent:
     free_text: str = ""
     # True when the query looks like a restaurant name rather than a dish.
     name_like: bool = False
+    # Aspects the user asked to be good: food | price | service | space |
+    # hygiene | parking. Ranked on, never filtered on, because a restaurant
+    # without enough mentions has no evidence either way rather than a bad one.
+    aspects: list[str] = field(default_factory=list)
 
     @property
     def has_constraints(self) -> bool:
@@ -178,6 +224,7 @@ class Intent:
             or self.price_max
             or self.min_rating
             or self.exclude
+            or self.aspects
         )
 
     @property
@@ -206,6 +253,7 @@ class Intent:
             "sort_by": self.sort_by,
             "free_text": self.free_text,
             "name_like": self.name_like,
+            "aspects": self.aspects,
         }
 
 
@@ -355,6 +403,19 @@ def parse_intent(query: str, has_gps: bool = False) -> Intent:
 
     # 4. Negation spans, computed on the full text for correct positions.
     negations = _negated_spans(translated)
+
+    # 4b. Aspect cues, longest phrase first. Read before tags so "sạch sẽ" is
+    #     taken as a request for a clean place rather than only as the tag some
+    #     crawler happened to apply. A negated cue is dropped rather than
+    #     inverted: "không sạch sẽ" is not a request for a dirty restaurant.
+    for cue, key in ASPECT_CUES_SORTED:
+        pattern = rf"(?<!\w){re.escape(cue)}(?!\w)"
+        if not re.search(pattern, stripped, re.IGNORECASE):
+            continue
+        if _is_negated(translated, cue, negations):
+            continue
+        if key not in intent.aspects:
+            intent.aspects.append(key)
 
     # 5. Places. Longest alias first so "quận 12" beats "quận 1".
     remaining = stripped

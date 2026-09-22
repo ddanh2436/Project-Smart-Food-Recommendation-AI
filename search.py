@@ -65,6 +65,19 @@ W_PROXIMITY_PRIOR = 0.30
 # returning "Phở Cần Thơ" -- so it is gated on `intent.name_like` being false.
 W_RATING_PRIOR_CATEGORICAL = 3.0
 
+# Weight for an aspect the user asked about ("sạch sẽ", "chỗ đậu xe").
+#
+# Large enough to reorder a result set, small enough that it cannot lift an
+# irrelevant restaurant past a relevant one: the content floor has already
+# decided what is in the running, and this only sorts within it.
+W_ASPECT = 1.6
+
+# Fewer mentions than this is not evidence. A restaurant below the bar scores
+# zero for that aspect -- not negative -- because "nobody mentioned the
+# parking" and "the parking is bad" are different claims, and only one of them
+# is supported. Matches aspect_index.MIN_MENTIONS.
+ASPECT_MIN_MENTIONS = 3.0
+
 # Rows farther than this are dropped when the user asked for "near me".
 NEARBY_RADIUS_KM = 20.0
 
@@ -335,6 +348,24 @@ def _relevance(
         else W_RATING_PRIOR
     )
     scores += rating_weight * np.clip(rating / 10.0, 0.0, 1.0)
+
+    # --- aspect priors, from the precomputed review verdicts
+    #
+    # Asking for "quán ăn sạch sẽ" used to be answered by matching that string
+    # against the tag list, which finds only the places a crawler labelled and
+    # misses every place whose reviewers said so. This ranks on what the
+    # reviews actually say. Restaurants the aspect index has not reached yet
+    # score zero, so a partial index quietly adds nothing rather than breaking.
+    for key in intent.aspects:
+        ratio_column, count_column = f"aspect_{key}", f"aspect_{key}_n"
+        if ratio_column not in frame.columns:
+            continue
+        ratio = frame[ratio_column].to_numpy(dtype="float32")
+        mentions = frame[count_column].to_numpy(dtype="float32")
+        evidenced = mentions >= ASPECT_MIN_MENTIONS
+        prior = np.zeros(size, dtype="float32")
+        prior[evidenced] = np.clip(ratio[evidenced], 0.0, 1.0)
+        scores += W_ASPECT * prior
 
     # --- proximity prior, only when a distance is actually known
     if "distance_km" in frame.columns:

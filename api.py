@@ -25,6 +25,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field, field_validator
 
 import chat as chat_engine
+import aspect_index
 import review_insights
 from config import settings
 from data_store import store
@@ -440,6 +441,23 @@ async def search_by_image(file: UploadFile = File(...)) -> dict:
 # ==========================================================================
 # Admin
 # ==========================================================================
+@app.post("/admin/aspect-index", dependencies=[Depends(require_admin)])
+async def admin_aspect_index(limit: int = 200, force: bool = False) -> dict:
+    """Precompute the per-aspect review verdicts used for aspect search.
+
+    Batched on purpose: the full pass runs the sentiment model over every
+    review and takes hours on a free CPU. Call it repeatedly until `remaining`
+    reaches zero. Most-reviewed restaurants are indexed first, so stopping part
+    way still covers the places search actually surfaces.
+    """
+    return aspect_index.build(limit=limit, force=force)
+
+
+@app.get("/admin/aspect-index", dependencies=[Depends(require_admin)])
+async def admin_aspect_index_status() -> dict:
+    return aspect_index.status()
+
+
 @app.post("/admin/reload", dependencies=[Depends(require_admin)])
 async def admin_reload() -> dict:
     """Re-read the restaurant collection and rebuild the search indexes."""

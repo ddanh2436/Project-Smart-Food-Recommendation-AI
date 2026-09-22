@@ -76,13 +76,22 @@ REQUIRED_COLUMNS: dict[str, Any] = {
     "score_price": 0.0,
     "review_count": 0.0,
     "rating_adjusted": 0.0,
+    **{name: 0.0 for name in ASPECT_RATIO_COLUMNS},
+    **{name: 0.0 for name in ASPECT_COUNT_COLUMNS},
 }
+
+# Aspects precomputed by aspect_index.py. Kept as flat columns rather than a
+# nested dict so the ranker can read them as numpy arrays.
+ASPECT_KEYS = ["food", "price", "service", "space", "hygiene", "parking"]
+ASPECT_RATIO_COLUMNS = [f"aspect_{key}" for key in ASPECT_KEYS]
+ASPECT_COUNT_COLUMNS = [f"aspect_{key}_n" for key in ASPECT_KEYS]
 
 NUMERIC_COLUMNS = [
     "rating", "price", "lat", "lon",
     "score_space", "score_location", "score_quality",
     "score_service", "score_price",
     "review_count", "rating_adjusted",
+    *ASPECT_RATIO_COLUMNS, *ASPECT_COUNT_COLUMNS,
 ]
 # --------------------------------------------------------------------------
 # Rating shrinkage
@@ -302,6 +311,25 @@ class RestaurantStore:
                 "back to the raw rating until then."
             )
             frame["rating_adjusted"] = frame["rating"]
+
+        # Unpack the precomputed aspect verdicts. A restaurant without them
+        # simply scores zero on every aspect, which the ranker reads as "no
+        # evidence" -- so a partial index degrades instead of breaking.
+        raw_aspects = (
+            frame["aspects"] if "aspects" in frame.columns else pd.Series([None] * len(frame))
+        )
+        for key in ASPECT_KEYS:
+            ratios, mentions = [], []
+            for value in raw_aspects:
+                entry = value.get(key) if isinstance(value, dict) else None
+                if isinstance(entry, dict):
+                    ratios.append(float(entry.get("positive_ratio") or 0.0))
+                    mentions.append(float(entry.get("mentions") or 0.0))
+                else:
+                    ratios.append(0.0)
+                    mentions.append(0.0)
+            frame[f"aspect_{key}"] = ratios
+            frame[f"aspect_{key}_n"] = mentions
 
         frame["district"] = frame["address"].apply(extract_district)
         frame["city"] = [
