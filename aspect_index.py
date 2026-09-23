@@ -35,6 +35,7 @@ from datetime import datetime, timezone
 
 import review_insights
 from config import settings
+from sentiment import analyzer
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,18 @@ def build(limit: int = 200, force: bool = False) -> dict:
     """
     if not settings.mongo_uri:
         return {"error": "MONGO_URI is not set", "processed": 0, "remaining": 0}
+
+    # Without the model every clause comes back neutral, and the result looks
+    # like a real verdict: every ratio 0.0, every aspect "mixed". One run on a
+    # notebook whose model failed to load wrote that over thousands of good
+    # entries. Refuse to start rather than index noise.
+    analyzer.load()
+    if not analyzer.ready:
+        return {
+            "error": f"Sentiment model is not available: {analyzer.error}",
+            "processed": 0,
+            "remaining": -1,
+        }
 
     client = _client()
     database = client[settings.db_name]
@@ -158,6 +171,18 @@ def build(limit: int = 200, force: bool = False) -> dict:
             continue
 
         digest = review_insights.summarize_reviews(rows, lang="vi")
+        # The model can also fail per batch (out of GPU memory, a CUDA
+        # error), which the analyzer turns into all-neutral output. Keep what
+        # was done, write nothing for this one, and stop.
+        if digest.get("review_count") and not digest.get("available"):
+            flush()
+            client.close()
+            return {
+                "error": "Sentiment inference failed; stopped without writing. "
+                "See the log for the cause.",
+                "processed": processed,
+                "remaining": -1,
+            }
         aspects = {
             item["key"]: {
                 "positive_ratio": round(float(item["positive_ratio"]), 3),
@@ -244,6 +269,8 @@ if __name__ == "__main__":  # pragma: no cover - operational entry point
         while True:
             report = build(limit=args.limit, force=args.force)
             print(report)
+            if report.get("error"):
+                raise SystemExit(report["error"])
             if not args.all or report.get("remaining", 0) <= 0:
                 break
             # After the first forced batch those documents are fresh again, so
