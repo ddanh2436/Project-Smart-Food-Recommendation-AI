@@ -79,6 +79,9 @@ class Settings:
 
     # --- Admin ---
     admin_token: str = os.getenv("ADMIN_TOKEN", "").strip()
+    # Shared with the backend, which sends it as `x-internal-token`. When set,
+    # every data endpoint requires it; see the middleware in api.py.
+    internal_api_token: str = os.getenv("INTERNAL_API_TOKEN", "").strip()
 
     @property
     def yolo_weights(self) -> Path:
