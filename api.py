@@ -14,12 +14,14 @@ Run in prod:      uvicorn api:app --host 0.0.0.0 --port $PORT
 
 from __future__ import annotations
 
+import hmac
 import logging
 import time
 from contextlib import asynccontextmanager
 from typing import Any, Literal
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field, field_validator
@@ -223,6 +225,43 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
+# Paths that answer without the internal token: the landing and health probes,
+# the API description, and the admin routes, which carry their own token.
+PUBLIC_PATHS = {"/", "/health", "/docs", "/openapi.json", "/redoc"}
+
+
+def _same_secret(provided: str, expected: str) -> bool:
+    """Constant-time comparison, so response timing reveals nothing."""
+    return hmac.compare_digest(provided.encode(), expected.encode())
+
+
+@app.middleware("http")
+async def require_internal_token(request: Request, call_next):
+    """Refuse data requests that did not come through the backend.
+
+    The Space is public, so every endpoint here could be called directly,
+    skipping the rate limits the backend enforces. /review-insights accepts 500
+    reviews of 5,000 characters, and a few such requests hold the Space's only
+    CPU for minutes -- search and chat stop for everyone meanwhile.
+
+    Open when INTERNAL_API_TOKEN is unset, so the token can be set on the
+    backend first and here second without an outage between the two; /health
+    reports which state the service is in.
+    """
+    expected = settings.internal_api_token
+    path = request.url.path
+    if (
+        expected
+        and request.method != "OPTIONS"
+        and path not in PUBLIC_PATHS
+        and not path.startswith("/admin/")
+    ):
+        provided = request.headers.get("x-internal-token", "")
+        if not provided or not _same_secret(provided, expected):
+            return JSONResponse({"detail": "Forbidden"}, status_code=403)
+    return await call_next(request)
+
+
 def require_admin(x_admin_token: str = Header(default="")) -> None:
     """Guard destructive/expensive endpoints.
 
@@ -231,7 +270,7 @@ def require_admin(x_admin_token: str = Header(default="")) -> None:
     """
     if not settings.admin_token:
         raise HTTPException(503, "ADMIN_TOKEN is not configured on the server")
-    if x_admin_token != settings.admin_token:
+    if not x_admin_token or not _same_secret(x_admin_token, settings.admin_token):
         raise HTTPException(401, "Invalid admin token")
 
 
@@ -241,6 +280,9 @@ def require_admin(x_admin_token: str = Header(default="")) -> None:
 def health_payload() -> dict:
     data = store.status()
     return {
+        # Whether data endpoints require the backend's shared token. False
+        # means the Space is callable by anyone; set INTERNAL_API_TOKEN.
+        "internal_auth": bool(settings.internal_api_token),
         "status": "ok" if data["restaurants"] > 0 else "degraded",
         "version": SERVICE_VERSION,
         "data": data,
@@ -369,11 +411,12 @@ async def predict_food(file: UploadFile = File(...)) -> dict:
     if file.content_type and not file.content_type.startswith("image/"):
         raise HTTPException(415, f"Expected an image, got {file.content_type}")
 
-    contents = await file.read()
+    # Read at most one byte past the limit. `await file.read()` loaded the
+    # whole upload first and measured it afterwards, so the size guard below
+    # ran only once an arbitrarily large body was already in memory.
+    contents = await file.read(settings.max_upload_bytes + 1)
     if not contents:
         raise HTTPException(400, "Empty upload")
-    # Guard the upload size: an unbounded read is a trivial memory exhaustion
-    # vector on a small Space.
     if len(contents) > settings.max_upload_bytes:
         raise HTTPException(
             413, f"Image larger than {settings.max_upload_mb}MB"

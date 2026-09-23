@@ -35,6 +35,13 @@ import requests
 
 BASE = Path(__file__).resolve().parent
 API = os.getenv("AI_EVAL_URL", "http://127.0.0.1:5000").rstrip("/")
+# The service refuses data requests without the backend's shared token once
+# INTERNAL_API_TOKEN is set on it, so the benchmark sends the same one.
+HEADERS = (
+    {"x-internal-token": os.environ["INTERNAL_API_TOKEN"]}
+    if os.getenv("INTERNAL_API_TOKEN")
+    else {}
+)
 
 GREEN, RED, YELLOW, BLUE, DIM, END = (
     "\033[92m", "\033[91m", "\033[93m", "\033[94m", "\033[90m", "\033[0m",
@@ -99,7 +106,7 @@ def run(cases: list[dict], top_k: int = 5) -> dict:
         try:
             response = requests.post(
                 f"{API}/recommend", json={"query": query, "limit": top_k},
-                timeout=60,
+                headers=HEADERS, timeout=60,
             )
             latencies.append((time.time() - started) * 1000)
             if response.status_code != 200:
