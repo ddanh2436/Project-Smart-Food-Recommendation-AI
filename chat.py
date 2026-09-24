@@ -183,6 +183,17 @@ CLARIFY_QUESTIONS = {
     ],
 }
 
+# When nothing was found *and* the query was not understood, the honest
+# answer is "I did not follow", naming the words, not "there is no such
+# place" -- which blames the data for what was a misreading.
+UNCLEAR_REPLIES = {
+    "vi": "Mình chưa hiểu \"{words}\" lắm 🤔. Bạn nói thử tên món, khu vực hoặc mức giá nhé — hoặc chọn nhanh bên dưới:",
+    "en": "I didn't quite follow \"{words}\" 🤔. Try a dish, an area or a budget — or pick one below:",
+}
+
+# At or below this parser confidence an empty result is a misreading.
+UNCLEAR_CONFIDENCE = 0.5
+
 GREETING_REPLIES = {
     "vi": [
         "Chào bạn! 👋 Hôm nay bạn muốn ăn gì? Nhắn tên món, khu vực, hoặc gửi ảnh món ăn nhé!",
@@ -579,6 +590,18 @@ def respond(
         exhausted = False
 
     payloads = [row_to_payload(row, result.intent) for _, row in rows.iterrows()]
+
+    if not payloads and result.intent.confidence <= UNCLEAR_CONFIDENCE:
+        missing = _missing_slots(result.intent)
+        words = result.intent.free_text or (message or "").strip()
+        return {
+            "reply": UNCLEAR_REPLIES[lang].format(words=words[:40]),
+            "results": [],
+            "intent": result.intent.to_dict(),
+            "kind": "clarify",
+            "slots_missing": missing,
+            "chips": _slot_chips(result.intent, lang, missing),
+        }
 
     if not payloads:
         template = random.choice(NOT_FOUND_REPLIES[lang])

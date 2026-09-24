@@ -176,6 +176,7 @@ STOPWORDS = [
     "tôi", "mình", "tớ", "em", "anh", "chị", "bạn", "cho", "với", "và",
     "ở", "tại", "vùng", "gần", "đồ", "món", "loại", "kiểu",
     "gì", "nào", "đó", "này", "thì", "là", "có", "được", "hơi", "khá",
+    "mà", "nhưng", "nhé", "nha", "ạ", "đi", "cái", "chút", "còn",
     "giá", "mức giá", "điểm", "sao", "người", "phần", "suất",
     "nhất", "rất", "lắm", "quá", "hơn", "trên", "dưới", "khoảng", "tầm",
     # English
@@ -242,6 +243,14 @@ class Intent:
     # Aspects the user asked not to be complained about. Penalised rather than
     # boosted: "đừng bị chê phục vụ" is not a request for praised service.
     aspect_avoid: list[str] = field(default_factory=list)
+    # Everyday phrases read as sets of slots ("món nước", "giá sinh viên");
+    # see knowledge.CONCEPTS. Names only, for explanation and debugging.
+    concepts: list[str] = field(default_factory=list)
+    # How much of the query the rules understood, 0..1, and what they did not.
+    # The gate for anything heavier (a clarifying question, a language model):
+    # a query read with confidence needs neither.
+    confidence: float = 1.0
+    uncertainties: list[str] = field(default_factory=list)
 
     @property
     def has_constraints(self) -> bool:
@@ -286,6 +295,9 @@ class Intent:
             "name_like": self.name_like,
             "aspects": self.aspects,
             "aspect_avoid": self.aspect_avoid,
+            "concepts": self.concepts,
+            "confidence": self.confidence,
+            "uncertainties": self.uncertainties,
         }
 
 
@@ -407,6 +419,103 @@ def _avoided_aspects(text: str) -> list[str]:
     return found
 
 
+def _add(target: list[str], values: list[str]) -> None:
+    for value in values:
+        if value not in target:
+            target.append(value)
+
+
+def _apply_concepts(text: str, intent: Intent) -> tuple[str, dict]:
+    """Read everyday phrases as slots, consuming them from ``text``.
+
+    Returns the remaining text and the soft settings (price, sort) that only
+    apply when the query does not state them outright, so "dưới 40k" still
+    wins over a "giá sinh viên" read.
+    """
+    negations = _negated_spans(text)
+    soft: dict = {}
+    for cue, concept in kb.CONCEPT_CUES_SORTED:
+        pattern = rf"(?<!\w){re.escape(cue)}(?!\w)"
+        if not re.search(pattern, text, re.IGNORECASE):
+            continue
+        # "không phải món nước" is not a request for soup. A cue that is itself
+        # a negation ("không quá đắt") contains its own marker, so the check
+        # is on what precedes it.
+        if not cue.startswith(("không", "đừng")) and _is_negated(text, cue, negations):
+            continue
+        text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
+        if concept["name"] not in intent.concepts:
+            intent.concepts.append(concept["name"])
+        _add(intent.dishes, concept.get("dishes", []))
+        _add(intent.adjectives, concept.get("adjectives", []))
+        _add(intent.aspects, concept.get("aspects", []))
+        _add(intent.time_tags, concept.get("time_tags", []))
+        for district in concept.get("districts", []):
+            _add(intent.districts, [district])
+            city = kb.DISTRICT_TO_CITY.get(district)
+            if city:
+                _add(intent.cities, [city])
+        if concept.get("price_max") and not soft.get("price_max"):
+            soft["price_max"] = float(concept["price_max"])
+        if concept.get("sort_by") and not soft.get("sort_by"):
+            soft["sort_by"] = concept["sort_by"]
+    return text, soft
+
+
+def _score_confidence(intent: Intent) -> None:
+    """How much of the query was understood, from what was and was not read.
+
+    Counts the slots filled against the words left over. Nothing understood
+    and several words left is either a restaurant's name or a phrasing the
+    rules do not know -- the two cannot be told apart here, so it is scored
+    in the middle and flagged, rather than trusted or discarded.
+    """
+    known = (
+        len(intent.dishes) + len(intent.districts) + len(intent.cities)
+        + len(intent.adjectives) + len(intent.time_tags) + len(intent.exclude)
+        + len(intent.aspects) + len(intent.aspect_avoid) + len(intent.concepts)
+        + int(intent.price_min is not None or intent.price_max is not None)
+        + int(intent.min_rating is not None)
+        + int(intent.open_now) + int(intent.wants_nearby)
+        + int(intent.sort_by != "relevance")
+    )
+    unknown = len(intent.free_text.split())
+    uncertainties: list[str] = []
+
+    # Slots that shape a search but say nothing about what to eat or where:
+    # "ăn gì bây giờ" is read as open-now and nothing else, which is a vague
+    # request, not a confident one.
+    substantive = known - (
+        int(intent.open_now) + int(intent.wants_nearby)
+        + int(intent.sort_by != "relevance")
+    )
+    if substantive == 0 and not unknown:
+        intent.confidence = 0.35 if known == 0 else 0.45
+        intent.uncertainties = ["vague"]
+        return
+
+    if known == 0 and unknown == 0:
+        confidence = 0.35
+        uncertainties.append("vague")
+    elif known == 0:
+        confidence = 0.5 if unknown >= 2 else 0.4
+        uncertainties.append("possible_name" if unknown >= 2 else "unknown_term")
+    else:
+        confidence = known / (known + unknown)
+        if unknown:
+            uncertainties.append("unread_words")
+        if unknown >= 2:
+            # "Phở Thìn Lò Đúc": a dish plus a name. The search's name match
+            # usually answers these, so a low score here is a prompt to check
+            # the results, not proof the query was misread.
+            uncertainties.append("possible_name")
+
+    intent.confidence = round(max(0.0, min(1.0, confidence)), 2)
+    if intent.free_text:
+        uncertainties.append(f"free_text:{intent.free_text}")
+    intent.uncertainties = uncertainties
+
+
 def parse_intent(query: str, has_gps: bool = False) -> Intent:
     """Turn a free-text query into an :class:`Intent`.
 
@@ -421,6 +530,9 @@ def parse_intent(query: str, has_gps: bool = False) -> Intent:
 
     # 1. English -> Vietnamese, then colloquial -> canonical.
     translated = tu.replace_phrases(normalized, kb.EN_VI_MAPPING, kb.EN_VI_SORTED)
+    # Concepts before synonyms: "giá sinh viên" is a price and a sort, and
+    # would otherwise be flattened to the tag "rẻ" first.
+    translated, soft = _apply_concepts(translated, intent)
     translated = tu.replace_phrases(
         translated, kb.TAG_SYNONYMS, kb.TAG_SYNONYMS_SORTED
     )
@@ -446,8 +558,13 @@ def parse_intent(query: str, has_gps: bool = False) -> Intent:
         for cue in _OPEN_NOW_CUES
     )
 
+    if intent.price_max is None and soft.get("price_max"):
+        intent.price_max = soft["price_max"]
+
     # 3. Sort criterion, before the cue words get stripped out.
     intent.sort_by = _detect_sort(translated, has_gps)
+    if intent.sort_by == "relevance" and soft.get("sort_by"):
+        intent.sort_by = soft["sort_by"]
     intent.wants_nearby = _wants_nearby(translated)
 
     # 4. Negation spans, computed on the full text for correct positions.
@@ -534,4 +651,5 @@ def parse_intent(query: str, has_gps: bool = False) -> Intent:
     #    ranker should boost exact name matches for this query.
     intent.name_like = len(intent.free_text.split()) >= 2
 
+    _score_confidence(intent)
     return intent

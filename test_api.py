@@ -9,7 +9,11 @@ no MongoDB and no network. Run it after any change to the AI service:
 The sentiment and YOLO models are loaded for real, so the first run
 downloads weights and is slow.
 """
-import sys, io, json
+import os, sys, io, json
+
+# The service refuses calls without the shared token when one is configured,
+# and a developer's .env usually sets it; this test calls the app directly.
+os.environ["INTERNAL_API_TOKEN"] = ""
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 import data_store

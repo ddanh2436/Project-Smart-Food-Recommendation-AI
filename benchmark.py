@@ -99,9 +99,31 @@ def run(cases: list[dict], top_k: int = 5) -> dict:
     }
     latencies: list[float] = []
     failures: list[str] = []
+    # Pass/total per group, and the parser's confidence on each case, so a
+    # change can be read as "concept phrasing went from 40% to 90%" rather
+    # than as one blended number.
+    groups: dict[str, list[int]] = {}
+    confidences: list[float] = []
 
     for case in cases:
         query = case["query"]
+        group = case.get("group", "other")
+        tally = groups.setdefault(group, [0, 0])
+        tally[1] += 1
+        failed_before = len(failures)
+        _run_case(case, query, top_k, results, latencies, failures, confidences)
+        if len(failures) == failed_before:
+            tally[0] += 1
+
+    return _finish(results, latencies, failures, groups, confidences, cases)
+
+
+def _run_case(case, query, top_k, results, latencies, failures, confidences):
+    if True:
+        # The language-model parser runs on a free tier limited per minute;
+        # the "hard" cases are the ones that reach it, so they are spaced out.
+        if case.get("group") == "hard":
+            time.sleep(float(os.getenv("BENCH_LLM_SPACING", "4")))
         started = time.time()
         try:
             response = requests.post(
@@ -112,12 +134,12 @@ def run(cases: list[dict], top_k: int = 5) -> dict:
             if response.status_code != 200:
                 results["errors"] += 1
                 failures.append(f"{query}: HTTP {response.status_code}")
-                continue
+                return
             payload = response.json()
         except Exception as exc:  # noqa: BLE001
             results["errors"] += 1
             failures.append(f"{query}: {exc}")
-            continue
+            return
 
         items = payload.get("scores", [])[:top_k]
         # A case that asserts emptiness is not a zero-result problem; counting
@@ -126,6 +148,14 @@ def run(cases: list[dict], top_k: int = 5) -> dict:
             results["zero_results"] += 1
         if payload.get("relaxed_filters"):
             results["relaxed"] += 1
+
+        confidence = (payload.get("intent") or {}).get("confidence")
+        if isinstance(confidence, (int, float)):
+            confidences.append(float(confidence))
+            if "min_confidence" in case and confidence < case["min_confidence"]:
+                failures.append(f"{query}: confidence {confidence} < {case['min_confidence']}")
+            if "max_confidence" in case and confidence > case["max_confidence"]:
+                failures.append(f"{query}: confidence {confidence} > {case['max_confidence']}")
 
         if case.get("intent"):
             results["intent_checked"] += 1
@@ -146,7 +176,7 @@ def run(cases: list[dict], top_k: int = 5) -> dict:
             else:
                 results["top1"] += 1
                 results["top5"] += 1
-            continue
+            return
 
         if case.get("min_distinct_dishes"):
             found = distinct_dishes(items)
@@ -159,11 +189,11 @@ def run(cases: list[dict], top_k: int = 5) -> dict:
                     f"{query}: only {found} distinct dishes in top {top_k}, "
                     f"wanted {case['min_distinct_dishes']}"
                 )
-            continue
+            return
 
         needles = case.get("expect_top1") or case.get("expect_any")
         if not needles:
-            continue
+            return
         results["scored"] += 1
         if items and matches(items[0], needles):
             results["top1"] += 1
@@ -181,6 +211,8 @@ def run(cases: list[dict], top_k: int = 5) -> dict:
                 + (f" (top: {items[0].get('name', '')[:40]})" if items else "")
             )
 
+
+def _finish(results, latencies, failures, groups, confidences, cases):
     answerable = max(
         len([c for c in cases if not c.get("expect_empty")]), 1
     )
@@ -199,6 +231,11 @@ def run(cases: list[dict], top_k: int = 5) -> dict:
         "errors": results["errors"],
     }
     results["failures"] = failures
+    results["groups"] = {name: {"passed": p, "total": t} for name, (p, t) in groups.items()}
+    if confidences:
+        results["metrics"]["low_confidence_rate"] = round(
+            sum(1 for c in confidences if c < 0.5) / len(confidences) * 100, 2
+        )
     return results
 
 
@@ -212,6 +249,7 @@ HIGHER_IS_BETTER = {
     "latency_p50_ms": False,
     "latency_p95_ms": False,
     "errors": False,
+    "low_confidence_rate": False,
 }
 
 
@@ -234,6 +272,17 @@ def report(current: dict, baseline: dict | None) -> int:
             elif was is not None:
                 line += f"   {DIM}unchanged{END}"
         print(line)
+
+    if current.get("groups"):
+        print(f"\n{BLUE}By group{END}")
+        was_groups = (baseline or {}).get("groups", {})
+        for name, g in sorted(current["groups"].items()):
+            line = f"  {name:<12} {g['passed']:>3}/{g['total']:<3}"
+            old = was_groups.get(name)
+            if old and old["total"] == g["total"] and old["passed"] != g["passed"]:
+                delta = g["passed"] - old["passed"]
+                line += f"   {(GREEN if delta > 0 else RED)}{delta:+}{END}"
+            print(line)
 
     if current["failures"]:
         print(f"\n{YELLOW}Failing cases ({len(current['failures'])}):{END}")
