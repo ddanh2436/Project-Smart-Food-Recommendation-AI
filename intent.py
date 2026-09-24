@@ -528,7 +528,7 @@ def _score_confidence(intent: Intent) -> None:
     intent.uncertainties = uncertainties
 
 
-def parse_intent(query: str, has_gps: bool = False) -> Intent:
+def parse_intent(query: str, has_gps: bool = False, use_concepts: bool = True) -> Intent:
     """Turn a free-text query into an :class:`Intent`.
 
     Order matters: English is translated first, then synonyms are folded to
@@ -544,7 +544,9 @@ def parse_intent(query: str, has_gps: bool = False) -> Intent:
     translated = tu.replace_phrases(normalized, kb.EN_VI_MAPPING, kb.EN_VI_SORTED)
     # Concepts before synonyms: "giá sinh viên" is a price and a sort, and
     # would otherwise be flattened to the tag "rẻ" first.
-    translated, soft = _apply_concepts(translated, intent)
+    translated, soft = (
+        _apply_concepts(translated, intent) if use_concepts else (translated, {})
+    )
     translated = tu.replace_phrases(
         translated, kb.TAG_SYNONYMS, kb.TAG_SYNONYMS_SORTED
     )

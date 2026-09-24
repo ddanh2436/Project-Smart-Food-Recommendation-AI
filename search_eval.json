@@ -1342,6 +1342,22 @@
       "group": "hard",
       "min_confidence": 0.7,
       "note": "Beyond the rules and concepts; read by the language-model parser (llm_parser.py), which marks it 0.75."
+    },
+    {
+      "query": "Cốm Phố Cổ Hàng Than",
+      "expect_top1": [
+        "cốm phố cổ"
+      ],
+      "group": "regression",
+      "note": "'phố cổ' inside a name was read as the old-quarter concept and filtered to Hoàn Kiếm; the place is in Ba Đình."
+    },
+    {
+      "query": "Bún Chả Que Tre Phố Cổ",
+      "expect_top1": [
+        "que tre"
+      ],
+      "group": "regression",
+      "note": "As above."
     }
   ]
 }

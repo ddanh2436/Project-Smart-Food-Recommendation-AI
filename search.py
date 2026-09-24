@@ -25,6 +25,7 @@ Pipeline
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -602,6 +603,14 @@ def search(
 
     if frame.empty:
         return SearchResult(intent, frame, 0, [])
+
+    # A concept inside a restaurant's name: "Cốm Phố Cổ Hàng Than" is a
+    # place, not a request for the old quarter. When every word of a query of
+    # three or more words sits in one name, read it again without concepts.
+    if intent.concepts and len(tu.normalize(query).split()) >= 3:
+        words = re.sub(r"[^\w\s]", " ", tu.normalize(query))
+        if _names_contain(frame, words):
+            intent = parse_intent(query, has_gps=has_gps, use_concepts=False)
 
     # A query the rules could not read goes to the language-model parser --
     # unless the unread words are a restaurant's name, which the name match

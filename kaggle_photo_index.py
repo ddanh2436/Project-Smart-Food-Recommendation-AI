@@ -97,6 +97,11 @@ from PIL import Image
 
 session = requests.Session()
 session.headers["User-Agent"] = "Mozilla/5.0 (VietNomNom photo check)"
+# One pooled connection per download thread; the default pool of 10 made the
+# 16 threads drop and reopen connections ("Connection pool is full").
+from requests.adapters import HTTPAdapter
+
+session.mount("https://", HTTPAdapter(pool_connections=16, pool_maxsize=16))
 
 
 def fetch(doc):
