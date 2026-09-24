@@ -22,10 +22,13 @@ from __future__ import annotations
 
 import random
 import re
-from dataclasses import dataclass
+
+import pandas as pd
+from dataclasses import dataclass, field
 
 import text_utils as tu
 from intent import Intent, parse_intent
+import place_qa
 from search import SearchResult, row_to_payload, search
 
 # --------------------------------------------------------------------------
@@ -315,6 +318,9 @@ RELAXED_NOTES = {
 class ChatTurn:
     role: str  # "user" | "bot"
     text: str
+    # For a bot turn: the ids of the places it showed, in order, so a later
+    # "quán thứ hai" or "quán đó" can be resolved.
+    ids: list[str] = field(default_factory=list)
 
 
 def _matches_any(text: str, cues: list[str]) -> bool:
@@ -421,10 +427,15 @@ def _success_reply(result: SearchResult, payloads: list[dict], lang: str) -> str
     total = result.total_before_ranking or len(payloads)
     shown = len(payloads)
     intent = result.intent
-    subject = (
-        ", ".join(intent.dishes) if intent.dishes
-        else (intent.free_text or (intent.raw_query or "").strip())
-    )
+    # What was understood, not the sentence typed: echoing a long request
+    # back verbatim read as if nothing had been understood. A concept can add
+    # many dishes ("món nước"), so only the first few are named.
+    if intent.dishes:
+        subject = ", ".join(intent.dishes[:3]) + ("…" if len(intent.dishes) > 3 else "")
+    elif intent.adjectives or intent.time_tags:
+        subject = ", ".join((intent.adjectives + intent.time_tags)[:3])
+    else:
+        subject = intent.free_text or (intent.raw_query or "").strip()[:60]
     where = intent.districts[0] if intent.districts else (
         intent.cities[0] if intent.cities else ""
     )
@@ -479,8 +490,13 @@ def respond(
     user_gps: list[float] | None = None,
     lang: str = "vi",
     limit: int = 5,
+    prefs: dict | None = None,
 ) -> dict:
-    """Produce a reply plus the restaurant cards that back it up."""
+    """Produce a reply plus the restaurant cards that back it up.
+
+    ``prefs`` holds the signed-in diner's tastes ({"favorite_tags": [...],
+    "home_city": "hcmc"}); they only nudge the ranking, never filter.
+    """
     lang = "vi" if lang not in {"vi", "en"} else lang
     history = history or []
     text = tu.normalize(message)
@@ -516,7 +532,55 @@ def respond(
         }
 
     has_gps = bool(user_gps and len(user_gps) == 2)
+
+    # --- about a place, or pointing back at one ----------------------------
+    reference = place_qa.resolve(message, history)
+    topics = place_qa.topics_of(message)
+    if reference and reference.similar:
+        base = place_qa.similar_query(reference.row)
+        similar = search(
+            f"{base} {reference.remainder}".strip(),
+            user_gps=user_gps, limit=limit + 1, prefs=prefs,
+        )
+        rows = similar.rows[similar.rows["id"] != reference.row.get("id")].head(limit)
+        payloads = [row_to_payload(row, similar.intent) for _, row in rows.iterrows()]
+        if payloads:
+            name = reference.row.get("name", "")
+            return {
+                "reply": (
+                    f"Mấy quán giống **{name}** ({base}) mà bạn có thể thích:"
+                    if lang == "vi" else f"Places like **{name}** ({base}):"
+                ),
+                "results": payloads,
+                "intent": similar.intent.to_dict(),
+                "kind": "results",
+            }
+    if reference and (topics or place_qa.is_question(message)):
+        return {
+            "reply": place_qa.answer(reference.row, topics, lang),
+            "results": [row_to_payload(pd.Series(reference.row), None)],
+            "intent": None,
+            "kind": "place_answer",
+        }
+
     intent = parse_intent(message, has_gps=has_gps)
+
+    # A question about a named place that was not in the last answer:
+    # "Phở Thìn Lò Đúc có chỗ đậu xe không".
+    if topics and place_qa.is_question(message) and place_qa.strip_question(intent.free_text):
+        # The dish joins the unread words: in "bún chả obama giá bao nhiêu"
+        # the dish is part of the name. The unread word is what makes it a
+        # name rather than a general question about bún chả.
+        named = place_qa.find_by_name(
+            " ".join(intent.dishes + [place_qa.strip_question(intent.free_text)])
+        )
+        if named is not None:
+            return {
+                "reply": place_qa.answer(named, topics, lang),
+                "results": [row_to_payload(pd.Series(named), None)],
+                "intent": intent.to_dict(),
+                "kind": "place_answer",
+            }
 
     # --- follow-up refinement --------------------------------------------
     refinement = _detect_refinement(text)
@@ -553,7 +617,8 @@ def respond(
     page = _more_count(history) if wants_more else 0
     offset = page * limit
     result = search(
-        effective_query, user_gps=user_gps, limit=max(limit + offset, 10)
+        effective_query, user_gps=user_gps, limit=max(limit + offset, 10),
+        prefs=prefs,
     )
 
     # A "near me" question with no coordinates cannot be ordered by distance;
