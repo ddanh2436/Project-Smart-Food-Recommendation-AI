@@ -120,6 +120,10 @@ def run(cases: list[dict], top_k: int = 5) -> dict:
 
 def _run_case(case, query, top_k, results, latencies, failures, confidences):
     if True:
+        # The language-model parser runs on a free tier limited per minute;
+        # the "hard" cases are the ones that reach it, so they are spaced out.
+        if case.get("group") == "hard":
+            time.sleep(float(os.getenv("BENCH_LLM_SPACING", "4")))
         started = time.time()
         try:
             response = requests.post(

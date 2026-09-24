@@ -36,6 +36,7 @@ import text_utils as tu
 from config import settings
 from data_store import store
 from intent import Intent, parse_intent
+import llm_parser
 
 logger = logging.getLogger(__name__)
 
@@ -535,6 +536,23 @@ def _diversify(frame: pd.DataFrame, intent: Intent) -> pd.DataFrame:
     return pd.concat([head.iloc[chosen], frame.iloc[depth:]])
 
 
+def _names_contain(frame: pd.DataFrame, text: str) -> bool:
+    """Whether ``text`` (accent-insensitive) appears in any restaurant name."""
+    folded = tu.fold(text or "").strip()
+    if len(folded) < 3:
+        return False
+    if "name_folded" not in frame.columns:
+        names = frame["name_norm"].map(tu.fold)
+    else:
+        names = frame["name_folded"]
+    # Every word, not the phrase: "thìn lò đúc" names "Phở Thìn - 13 Lò Đúc".
+    mask = None
+    for word in folded.split():
+        hit = names.str.contains(word, regex=False, na=False)
+        mask = hit if mask is None else (mask & hit)
+    return bool(mask is not None and mask.any())
+
+
 def search(
     query: str,
     user_gps: list[float] | None = None,
@@ -550,6 +568,16 @@ def search(
 
     if frame.empty:
         return SearchResult(intent, frame, 0, [])
+
+    # A query the rules could not read goes to the language-model parser --
+    # unless the unread words are a restaurant's name, which the name match
+    # below already answers and which the model would only discard.
+    if (
+        llm_parser.enabled()
+        and intent.confidence <= settings.llm_confidence_gate
+        and not _names_contain(frame, intent.free_text)
+    ):
+        intent = llm_parser.refine(intent, query)
 
     working = frame.copy()
     working["distance_km"] = _distance_column(working, user_gps if has_gps else None)

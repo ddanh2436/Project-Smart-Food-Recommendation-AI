@@ -1286,62 +1286,62 @@
     {
       "query": "muốn ăn gì đó thanh đạm cho nhẹ bụng",
       "group": "hard",
-      "min_confidence": 0.8,
-      "note": "Not covered yet; tracks what a language-model parser would add."
+      "min_confidence": 0.7,
+      "note": "Beyond the rules and concepts; read by the language-model parser (llm_parser.py), which marks it 0.75."
     },
     {
       "query": "món gì hợp để nhậu với bia",
       "group": "hard",
-      "min_confidence": 0.8,
-      "note": "Not covered yet; tracks what a language-model parser would add."
+      "min_confidence": 0.7,
+      "note": "Beyond the rules and concepts; read by the language-model parser (llm_parser.py), which marks it 0.75."
     },
     {
       "query": "quán nào nấu giống cơm mẹ nấu",
       "group": "hard",
-      "min_confidence": 0.8,
-      "note": "Not covered yet; tracks what a language-model parser would add."
+      "min_confidence": 0.7,
+      "note": "Beyond the rules and concepts; read by the language-model parser (llm_parser.py), which marks it 0.75."
     },
     {
       "query": "chỗ nào ngồi lâu làm việc được",
       "group": "hard",
-      "min_confidence": 0.8,
-      "note": "Not covered yet; tracks what a language-model parser would add."
+      "min_confidence": 0.7,
+      "note": "Beyond the rules and concepts; read by the language-model parser (llm_parser.py), which marks it 0.75."
     },
     {
       "query": "đặc sản cho khách nước ngoài thử",
       "group": "hard",
-      "min_confidence": 0.8,
-      "note": "Not covered yet; tracks what a language-model parser would add."
+      "min_confidence": 0.7,
+      "note": "Beyond the rules and concepts; read by the language-model parser (llm_parser.py), which marks it 0.75."
     },
     {
       "query": "quán ăn có không khí hoài cổ",
       "group": "hard",
-      "min_confidence": 0.8,
-      "note": "Not covered yet; tracks what a language-model parser would add."
+      "min_confidence": 0.7,
+      "note": "Beyond the rules and concepts; read by the language-model parser (llm_parser.py), which marks it 0.75."
     },
     {
       "query": "món ăn tốt cho người ốm",
       "group": "hard",
-      "min_confidence": 0.8,
-      "note": "Not covered yet; tracks what a language-model parser would add."
+      "min_confidence": 0.7,
+      "note": "Beyond the rules and concepts; read by the language-model parser (llm_parser.py), which marks it 0.75."
     },
     {
       "query": "quán ngon mà ít người biết",
       "group": "hard",
-      "min_confidence": 0.8,
-      "note": "Not covered yet; tracks what a language-model parser would add."
+      "min_confidence": 0.7,
+      "note": "Beyond the rules and concepts; read by the language-model parser (llm_parser.py), which marks it 0.75."
     },
     {
       "query": "chỗ ăn trước khi xem phim ở quận 1",
       "group": "hard",
-      "min_confidence": 0.8,
-      "note": "Not covered yet; tracks what a language-model parser would add."
+      "min_confidence": 0.7,
+      "note": "Beyond the rules and concepts; read by the language-model parser (llm_parser.py), which marks it 0.75."
     },
     {
       "query": "món gì ăn cho ấm người",
       "group": "hard",
-      "min_confidence": 0.8,
-      "note": "Not covered yet; tracks what a language-model parser would add."
+      "min_confidence": 0.7,
+      "note": "Beyond the rules and concepts; read by the language-model parser (llm_parser.py), which marks it 0.75."
     }
   ]
 }

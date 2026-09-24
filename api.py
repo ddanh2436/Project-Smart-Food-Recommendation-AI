@@ -32,6 +32,7 @@ import review_insights
 from config import settings
 from data_store import store
 from intent import parse_intent
+import llm_parser
 from search import row_to_payload, search
 from sentiment import analyzer
 import vision
@@ -293,6 +294,7 @@ def health_payload() -> dict:
                 "ready": store.semantic_ready,
                 "error": data["embedding_error"],
             },
+            "llm_parser": llm_parser.status(),
         },
     }
 

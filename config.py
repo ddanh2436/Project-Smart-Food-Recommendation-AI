@@ -72,6 +72,21 @@ class Settings:
     enable_sentiment: bool = _flag("ENABLE_SENTIMENT", True)
     enable_yolo: bool = _flag("ENABLE_YOLO", True)
 
+    # --- Language-model parser (free tier; off when no key is set) ---
+    # Only a query the rules could not read is sent, and only its text; the
+    # model fills intent slots and never names a restaurant.
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "").strip()
+    llm_model: str = os.getenv("LLM_MODEL", "gemini-3.5-flash-lite").strip()
+    llm_fallback_model: str = os.getenv(
+        "LLM_FALLBACK_MODEL", "gemini-3.1-flash-lite"
+    ).strip()
+    # Requests per UTC day before the parser stops calling out, so a traffic
+    # spike cannot run past the free quota.
+    llm_daily_cap: int = _int("LLM_DAILY_CAP", 800)
+    llm_timeout_seconds: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "6") or 6)
+    # Queries read at or below this confidence go to the model.
+    llm_confidence_gate: float = float(os.getenv("LLM_CONFIDENCE_GATE", "0.5") or 0.5)
+
     # --- Behaviour ---
     data_refresh_seconds: int = _int("DATA_REFRESH_SECONDS", 900)
     max_upload_mb: int = _int("MAX_UPLOAD_MB", 10)
