@@ -442,3 +442,238 @@ DISH_TAGS: set[str] = {
     tag for tag in CANDIDATE_TAGS
     if tag not in ADJECTIVE_TAGS and tag not in TIME_TAGS
 }
+
+
+# --------------------------------------------------------------------------
+# Concepts: everyday phrasing that stands for a set of slots.
+#
+# "món nước kiểu miền trung ở khu trung tâm, giá sinh viên" names no dish, no
+# district and no price, yet it says all three. The rules above only know
+# literal tags, so the whole sentence fell through to free text -- and, being
+# several unknown words, was then taken for a restaurant's name. A concept
+# maps such a phrase onto the slots the search already understands:
+#
+#   dishes     -> a filter; any one of them matches ("món nước" = phở OR bún…)
+#   adjectives -> ranking only, matched against the restaurant's tags
+#   aspects    -> ranking on the review verdicts (see intent.ASPECT_CUES)
+#   time_tags, districts, price_max, sort_by -> as in the Intent
+#
+# Every value here is a tag, district or aspect that exists in the data, so a
+# concept can widen a search but never invent a place. Cues are matched
+# before colloquial synonyms (TAG_SYNONYMS), longest first, and consumed.
+# --------------------------------------------------------------------------
+CONCEPTS: list[dict] = [
+    # -- Kinds of dish ----------------------------------------------------
+    {
+        "name": "soup_dishes",
+        "cues": ["món có nước", "món nước", "đồ nước", "món súp", "món chan nước"],
+        # Not bare "mì": tags are matched as substrings, and "mì" is inside
+        # "bánh mì", which is about as far from soup as a dish gets.
+        "dishes": [
+            "phở", "bún", "hủ tiếu", "bánh canh", "mì quảng", "mì vịt tiềm",
+            "miến", "cháo",
+        ],
+    },
+    {
+        "name": "dry_dishes",
+        "cues": ["món khô", "đồ khô"],
+        "dishes": ["cơm", "bánh mì", "xôi", "bún thịt nướng", "mì trộn", "bánh xèo"],
+    },
+    {
+        "name": "warming_food",
+        "cues": [
+            "trời lạnh", "trời mưa", "ấm bụng", "nóng hổi", "món nóng",
+            "nóng nóng", "đồ nóng", "ấm người", "cho ấm",
+        ],
+        "dishes": ["lẩu", "phở", "bún", "cháo", "hủ tiếu", "bánh canh"],
+    },
+    {
+        "name": "cooling_food",
+        "cues": [
+            "trời nóng", "giải nhiệt", "mát lạnh", "giải khát", "đồ mát",
+            "món mát", "uống gì mát",
+        ],
+        "dishes": ["chè", "kem", "sinh tố", "nước ép", "trà", "bingsu"],
+    },
+    {
+        "name": "light_bite",
+        "cues": ["ăn nhẹ", "ăn chơi", "lót dạ", "ăn xế", "đồ ăn vặt"],
+        "dishes": ["ăn vặt", "bánh tráng trộn", "xôi", "bánh mì", "chè"],
+    },
+    {
+        "name": "filling_food",
+        "cues": ["ăn no", "no bụng", "no nê", "ăn cho no", "cho no"],
+        "dishes": ["cơm", "lẩu", "bún", "phở"],
+    },
+    {
+        "name": "seafood",
+        "cues": ["đồ biển", "món biển", "hải sản tươi"],
+        "dishes": ["hải sản", "ốc"],
+    },
+    {
+        "name": "office_lunch",
+        "cues": [
+            "cơm trưa văn phòng", "ăn trưa văn phòng", "dân văn phòng",
+            "cơm văn phòng", "đồ ăn trưa",
+        ],
+        "dishes": ["cơm văn phòng", "cơm"],
+    },
+    {
+        "name": "healthy",
+        "cues": [
+            # Not "ăn sạch": it is the start of "quán ăn sạch sẽ", which asks
+            # for hygiene, not for a diet.
+            "ăn kiêng", "giảm cân", "ít dầu mỡ", "lành mạnh", "thanh đạm",
+            "nhẹ bụng",
+        ],
+        "adjectives": ["healthy", "eat clean", "chay"],
+    },
+    # -- Regional cooking: ranking, not a filter, because only some places
+    #    carry the regional tag and a filter would drop the rest. ----------
+    {
+        "name": "central_cooking",
+        "cues": [
+            "kiểu miền trung", "món miền trung", "đồ miền trung", "miền trung",
+            "món trung",
+        ],
+        "adjectives": ["món miền trung", "món huế"],
+    },
+    {
+        "name": "northern_cooking",
+        "cues": ["kiểu miền bắc", "món miền bắc", "đồ bắc", "miền bắc", "món bắc"],
+        "adjectives": ["món bắc"],
+    },
+    {
+        "name": "southern_cooking",
+        "cues": ["kiểu miền nam", "món miền nam", "miền nam", "món nam bộ"],
+        "adjectives": ["món miền nam"],
+    },
+    {
+        "name": "mekong_cooking",
+        "cues": ["kiểu miền tây", "món miền tây", "đồ miền tây", "miền tây"],
+        "adjectives": ["món miền tây"],
+    },
+    {
+        "name": "northwest_cooking",
+        "cues": ["tây bắc", "vùng cao"],
+        "adjectives": ["món tây bắc"],
+    },
+    # -- Budget -------------------------------------------------------------
+    {
+        "name": "homestyle",
+        "cues": ["dân dã", "bình dị", "kiểu nhà làm", "cơm nhà", "cơm mẹ nấu"],
+        "adjectives": ["bình dân", "cơm việt"],
+    },
+    {
+        "name": "student_budget",
+        "cues": [
+            "giá sinh viên", "túi tiền sinh viên", "sinh viên", "hạt dẻ",
+            "giá bèo", "rẻ bèo", "siêu rẻ",
+        ],
+        "adjectives": ["bình dân"],
+        "price_max": 60_000,
+        "sort_by": "price",
+    },
+    {
+        "name": "moderate_budget",
+        "cues": [
+            "không quá đắt", "không đắt lắm", "không đắt", "đừng quá đắt",
+            "vừa túi tiền", "giá vừa phải", "giá phải chăng", "tầm trung",
+        ],
+        "price_max": 150_000,
+        "aspects": ["price"],
+    },
+    # -- Occasion and company ---------------------------------------------
+    {
+        "name": "date",
+        "cues": [
+            "đi hẹn hò", "hẹn hò", "đi date", "người yêu", "bạn gái",
+            "bạn trai", "lãng mạn", "kỷ niệm ngày", "crush",
+        ],
+        "adjectives": ["hẹn hò"],
+        "aspects": ["space"],
+    },
+    {
+        "name": "quiet",
+        "cues": [
+            "không quá ồn", "đừng quá ồn", "không ồn ào", "không ồn", "đừng ồn",
+            "ít ồn", "yên tĩnh", "riêng tư", "chill",
+        ],
+        "adjectives": ["yên tĩnh"],
+        "aspects": ["space"],
+    },
+    {
+        "name": "family",
+        "cues": [
+            "đi với con", "có con nhỏ", "cho trẻ em", "trẻ con", "cả nhà",
+            "bố mẹ", "ông bà", "gia đình",
+        ],
+        "adjectives": ["gia đình"],
+    },
+    {
+        "name": "group",
+        "cues": [
+            "đông người", "nhóm bạn", "liên hoan", "sinh nhật", "họp lớp",
+            "tụ tập",
+        ],
+        "adjectives": ["tụ tập", "nhóm hội"],
+    },
+    {
+        "name": "business",
+        "cues": ["tiếp khách", "đối tác", "gặp khách", "mời sếp", "tiếp đối tác"],
+        "adjectives": ["tiếp khách", "sang trọng"],
+        "aspects": ["service"],
+    },
+    {
+        "name": "drinks",
+        "cues": [
+            "lai rai", "nhâm nhi", "làm vài ly", "đi nhậu", "uống bia",
+            "nhậu nhẹt",
+        ],
+        "adjectives": ["nhậu"],
+    },
+    {
+        "name": "photogenic",
+        "cues": ["check in", "checkin", "sống ảo", "chụp ảnh đẹp", "view đẹp"],
+        "adjectives": ["view đẹp"],
+        "aspects": ["space"],
+    },
+    # -- When ---------------------------------------------------------------
+    {
+        "name": "late_night",
+        "cues": ["về khuya", "nửa đêm", "đêm muộn", "khuya"],
+        "time_tags": ["ăn đêm"],
+    },
+    {
+        "name": "breakfast",
+        "cues": ["bữa sáng", "điểm tâm"],
+        "time_tags": ["sáng"],
+    },
+    # -- Where --------------------------------------------------------------
+    {
+        "name": "saigon_centre",
+        "cues": [
+            "trung tâm sài gòn", "trung tâm thành phố hồ chí minh",
+            "trung tâm tp hcm", "trung tâm tphcm", "trung tâm hcm",
+        ],
+        "districts": ["Quận 1", "Quận 3"],
+    },
+    {
+        "name": "hanoi_centre",
+        "cues": ["trung tâm hà nội", "phố cổ", "hồ gươm", "bờ hồ", "hồ hoàn kiếm"],
+        "districts": ["Hoàn Kiếm"],
+    },
+    {
+        "name": "city_centre",
+        "cues": ["khu trung tâm", "quận trung tâm", "trung tâm"],
+        "districts": ["Quận 1", "Quận 3", "Hoàn Kiếm", "Hải Châu"],
+    },
+]
+
+# (cue, concept) pairs, longest cue first, so "không quá đắt" is read before
+# "không đắt" and "trung tâm sài gòn" before "trung tâm".
+CONCEPT_CUES_SORTED: list[tuple[str, dict]] = sorted(
+    ((cue, concept) for concept in CONCEPTS for cue in concept["cues"]),
+    key=lambda pair: len(pair[0]),
+    reverse=True,
+)

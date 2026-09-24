@@ -131,6 +131,11 @@ NEARBY_RADIUS_KM = 20.0
 # returned the whole database ranked by rating.
 MIN_CONTENT_SCORE = 0.8
 
+# For a query with nothing understood: the lexical share (TF-IDF plus name
+# match) that must be present. Measured: nonsense strings 0.14-0.25, real
+# words 0.28+, and any name match adds at least W_NAME_PARTIAL.
+MIN_LEXICAL_SCORE = 0.27
+
 
 @dataclass
 class SearchResult:
@@ -300,19 +305,21 @@ def _is_open_now(hours: str) -> bool:
 
 def _relevance(
     frame: pd.DataFrame, intent: Intent, dish_matched: bool = False
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Blended relevance for every row.
 
-    Returns ``(total, content)``. ``content`` excludes the rating and
+    Returns ``(total, content, semantic)``. ``content`` excludes the rating and
     proximity priors, so the caller can tell "this row actually matches the
     query" apart from "this row is merely popular" — a distinction the ranker
     needs to answer a nonsense query with nothing instead of with everything.
     """
     size = len(frame)
     if size == 0:
-        return np.zeros(0, dtype="float32"), np.zeros(0, dtype="float32")
+        empty = np.zeros(0, dtype="float32")
+        return empty, empty, empty
 
     scores = np.zeros(size, dtype="float32")
+    semantic_part = np.zeros(size, dtype="float32")
     positions = frame.index.to_numpy()
 
     # --- lexical + semantic similarity, computed over the whole store then
@@ -325,7 +332,8 @@ def _relevance(
             scores += W_TFIDF * tfidf[positions].astype("float32")
         semantic = store.semantic_scores(query_text)
         if len(semantic) == full_frame_size:
-            scores += W_SEMANTIC * semantic[positions].astype("float32")
+            semantic_part = W_SEMANTIC * semantic[positions].astype("float32")
+            scores += semantic_part
 
     # --- name matching, the strongest signal for a named search
     name_query = tu.normalize(intent.raw_query)
@@ -427,7 +435,7 @@ def _relevance(
         prior[known] = 1.0 / (1.0 + distance[known] / 5.0)
         scores += W_PROXIMITY_PRIOR * prior
 
-    return scores, content
+    return scores, content, semantic_part
 
 
 def _order(frame: pd.DataFrame, intent: Intent) -> pd.DataFrame:
@@ -616,7 +624,9 @@ def search(
         return SearchResult(intent, working, 0, relaxed)
 
     # --- 2. rank ---------------------------------------------------------
-    total_scores, content_scores = _relevance(working, intent, dish_matched)
+    total_scores, content_scores, semantic_scores = _relevance(
+        working, intent, dish_matched
+    )
     working = working.assign(relevance=total_scores)
 
     # Two cases where a result set has to be proven relevant rather than just
@@ -637,6 +647,15 @@ def search(
     if query and query.strip() and (not expressed_intent or dish_unmatched):
         if content_scores.max(initial=0.0) < MIN_CONTENT_SCORE:
             return SearchResult(intent, working.iloc[0:0], 0, relaxed)
+        # Embedding similarity alone is not evidence: every string lands
+        # somewhere in the space, and "zzzqqq" or "qwertyuiop" scored as close
+        # to a restaurant (0.57-0.60) as real words do. With nothing in the
+        # query understood, some lexical match -- a word or a name -- has to
+        # be there too.
+        if not expressed_intent:
+            lexical = content_scores - semantic_scores
+            if lexical.max(initial=0.0) < MIN_LEXICAL_SCORE:
+                return SearchResult(intent, working.iloc[0:0], 0, relaxed)
         if dish_unmatched:
             # Some rows do carry query evidence: keep only those, so a search
             # for coffee never answers with the district's best pizza.

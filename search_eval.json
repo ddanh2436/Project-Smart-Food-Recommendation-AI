@@ -5,7 +5,8 @@
       "expect_any": [
         "bún đậu",
         "mắm tôm"
-      ]
+      ],
+      "group": "regression"
     },
     {
       "query": "lẩu gà lá é phú yên",
@@ -13,7 +14,8 @@
         "lẩu gà",
         "lá é",
         "phú yên"
-      ]
+      ],
+      "group": "regression"
     },
     {
       "query": "cơm niêu singapore",
@@ -21,28 +23,32 @@
         "cơm niêu",
         "thiên lý",
         "phương nam"
-      ]
+      ],
+      "group": "regression"
     },
     {
       "query": "bún quậy kiến xây",
       "expect_any": [
         "bún quậy",
         "saigon"
-      ]
+      ],
+      "group": "regression"
     },
     {
       "query": "nem nướng nha trang",
       "expect_any": [
         "nem nướng",
         "nha trang"
-      ]
+      ],
+      "group": "regression"
     },
     {
       "query": "bánh tằm cay cà mau",
       "expect_any": [
         "bánh tằm",
         "cà mau"
-      ]
+      ],
+      "group": "regression"
     },
     {
       "query": "gà nướng cơm lam tây nguyên",
@@ -51,7 +57,8 @@
         "cơm lam",
         "tây nguyên",
         "bản đôn"
-      ]
+      ],
+      "group": "regression"
     },
     {
       "query": "món ngon hà nội",
@@ -60,14 +67,16 @@
         "món bắc",
         "bún chả",
         "phở"
-      ]
+      ],
+      "group": "regression"
     },
     {
       "query": "đặc sản huế",
       "expect_any": [
         "huế",
         "cố đô"
-      ]
+      ],
+      "group": "regression"
     },
     {
       "query": "món ăn miền tây dân dã",
@@ -76,7 +85,8 @@
         "bún mắm",
         "bánh xèo",
         "cà mau"
-      ]
+      ],
+      "group": "regression"
     },
     {
       "query": "ẩm thực tây bắc",
@@ -84,7 +94,8 @@
         "tây bắc",
         "mẹt",
         "heo quay"
-      ]
+      ],
+      "group": "regression"
     },
     {
       "query": "quán ăn ngon quận 4",
@@ -93,7 +104,8 @@
         "bún mắm",
         "ốc",
         "phở"
-      ]
+      ],
+      "group": "regression"
     },
     {
       "query": "nhà hàng thảo điền quận 2",
@@ -101,7 +113,8 @@
         "thảo điền",
         "quận 2",
         "sang trọng"
-      ]
+      ],
+      "group": "regression"
     },
     {
       "query": "ăn uống khu phan xích long",
@@ -109,7 +122,8 @@
         "hoa phượng",
         "hoa lan",
         "phú nhuận"
-      ]
+      ],
+      "group": "regression"
     },
     {
       "query": "quán nhậu có máy lạnh",
@@ -118,7 +132,8 @@
         "máy lạnh",
         "lẩu",
         "nướng"
-      ]
+      ],
+      "group": "regression"
     },
     {
       "query": "ăn sáng món nước",
@@ -127,7 +142,8 @@
         "hủ tiếu",
         "bún",
         "ăn sáng"
-      ]
+      ],
+      "group": "regression"
     },
     {
       "query": "ăn đêm vỉa hè",
@@ -136,7 +152,8 @@
         "vỉa hè",
         "cháo",
         "ốc"
-      ]
+      ],
+      "group": "regression"
     },
     {
       "query": "nhà hàng sang trọng tiếp khách",
@@ -144,35 +161,40 @@
         "sang trọng",
         "tiếp khách",
         "doanh nhân"
-      ]
+      ],
+      "group": "regression"
     },
     {
       "query": "bún bò sụn",
       "expect_any": [
         "bún bò",
         "sụn"
-      ]
+      ],
+      "group": "regression"
     },
     {
       "query": "heo quay tây bắc",
       "expect_any": [
         "heo quay",
         "tây bắc"
-      ]
+      ],
+      "group": "regression"
     },
     {
       "query": "cháo lòng",
       "expect_any": [
         "cháo lòng",
         "dồi"
-      ]
+      ],
+      "group": "regression"
     },
     {
       "query": "nui xào bò",
       "expect_any": [
         "nui xào",
         "cô hai"
-      ]
+      ],
+      "group": "regression"
     },
     {
       "query": "Phở Thìn Lò Đúc",
@@ -182,24 +204,28 @@
       "intent": {
         "name_like": true
       },
-      "note": "Raising the rating weight globally once turned this into 'Phở Cần Thơ'. Name search must beat the quality prior."
+      "note": "Raising the rating weight globally once turned this into 'Phở Cần Thơ'. Name search must beat the quality prior.",
+      "group": "regression"
     },
     {
       "query": "phở",
       "expect_any": [
         "phở"
       ],
-      "note": "A bare dish name used to lead with a 5.0-rated place whose name is mostly the word itself."
+      "note": "A bare dish name used to lead with a 5.0-rated place whose name is mostly the word itself.",
+      "group": "regression"
     },
     {
       "query": "zzzqqq",
       "expect_empty": true,
-      "note": "Nonsense once returned the whole database ranked by rating, because the relevance floor sat inside the TF-IDF noise band."
+      "note": "Nonsense once returned the whole database ranked by rating, because the relevance floor sat inside the TF-IDF noise band.",
+      "group": "regression"
     },
     {
       "query": "qwertyuiop",
       "expect_empty": true,
-      "note": "As above."
+      "note": "As above.",
+      "group": "regression"
     },
     {
       "query": "lẩu dưới 200k",
@@ -212,7 +238,8 @@
           "lẩu"
         ]
       },
-      "note": "Price parsing."
+      "note": "Price parsing.",
+      "group": "regression"
     },
     {
       "query": "quán phở trên 8 điểm",
@@ -223,7 +250,8 @@
         "min_rating": 8.0,
         "price_max": null
       },
-      "note": "Rating is parsed before price; otherwise 'trên 8 điểm' was read as a price of 8 dong."
+      "note": "Rating is parsed before price; otherwise 'trên 8 điểm' was read as a price of 8 dong.",
+      "group": "regression"
     },
     {
       "query": "hải sản nhưng không cay",
@@ -236,7 +264,8 @@
           "cay"
         ]
       },
-      "note": "Negation has a window: 'hải sản' must survive it."
+      "note": "Negation has a window: 'hải sản' must survive it.",
+      "group": "regression"
     },
     {
       "query": "cơm tấm ở Quận 1 dưới 100k",
@@ -252,7 +281,8 @@
         ],
         "price_max": 100000.0
       },
-      "note": "All three slots in one query."
+      "note": "All three slots in one query.",
+      "group": "regression"
     },
     {
       "query": "quán ăn sạch sẽ",
@@ -261,7 +291,8 @@
           "hygiene"
         ]
       },
-      "note": "Aspect search reads the review verdicts, not the tag string."
+      "note": "Aspect search reads the review verdicts, not the tag string.",
+      "group": "regression"
     },
     {
       "query": "quán ăn ngon nhưng đừng bị chê phục vụ",
@@ -270,19 +301,22 @@
           "service"
         ]
       },
-      "note": "Avoidance is a penalty, not a request for praise."
+      "note": "Avoidance is a penalty, not a request for praise.",
+      "group": "regression"
     },
     {
       "query": "quán không sạch sẽ",
       "intent": {
         "aspects": []
       },
-      "note": "A negated aspect cue is dropped, never inverted."
+      "note": "A negated aspect cue is dropped, never inverted.",
+      "group": "regression"
     },
     {
       "query": "bún",
       "min_distinct_dishes": 4,
-      "note": "Diversity: the top used to be four bún chả places in a row."
+      "note": "Diversity: the top used to be four bún chả places in a row.",
+      "group": "regression"
     },
     {
       "query": "quận 12",
@@ -291,7 +325,1023 @@
           "Quận 12"
         ]
       },
-      "note": "Longest alias first, so 'quận 12' is not read as 'quận 1'."
+      "note": "Longest alias first, so 'quận 12' is not read as 'quận 1'.",
+      "group": "regression"
+    },
+    {
+      "query": "phở bò",
+      "expect_any": [
+        "phở"
+      ],
+      "group": "dish",
+      "intent": {
+        "dishes": [
+          "phở bò"
+        ]
+      }
+    },
+    {
+      "query": "bún bò huế",
+      "expect_any": [
+        "bún bò"
+      ],
+      "group": "dish",
+      "intent": {
+        "dishes": [
+          "bún bò huế"
+        ]
+      }
+    },
+    {
+      "query": "cơm tấm",
+      "expect_any": [
+        "cơm tấm"
+      ],
+      "group": "dish",
+      "intent": {
+        "dishes": [
+          "cơm tấm"
+        ]
+      }
+    },
+    {
+      "query": "bánh mì",
+      "expect_any": [
+        "bánh mì"
+      ],
+      "group": "dish",
+      "intent": {
+        "dishes": [
+          "bánh mì"
+        ]
+      }
+    },
+    {
+      "query": "lẩu",
+      "expect_any": [
+        "lẩu"
+      ],
+      "group": "dish",
+      "intent": {
+        "dishes": [
+          "lẩu"
+        ]
+      }
+    },
+    {
+      "query": "ốc",
+      "expect_any": [
+        "ốc"
+      ],
+      "group": "dish",
+      "intent": {
+        "dishes": [
+          "ốc"
+        ]
+      }
+    },
+    {
+      "query": "chè",
+      "expect_any": [
+        "chè"
+      ],
+      "group": "dish",
+      "intent": {
+        "dishes": [
+          "chè"
+        ]
+      }
+    },
+    {
+      "query": "trà sữa",
+      "expect_any": [
+        "trà sữa"
+      ],
+      "group": "dish",
+      "intent": {
+        "dishes": [
+          "trà sữa"
+        ]
+      }
+    },
+    {
+      "query": "cà phê",
+      "expect_any": [
+        "cà phê",
+        "coffee"
+      ],
+      "group": "dish"
+    },
+    {
+      "query": "bánh xèo",
+      "expect_any": [
+        "bánh xèo"
+      ],
+      "group": "dish",
+      "intent": {
+        "dishes": [
+          "bánh xèo"
+        ]
+      }
+    },
+    {
+      "query": "hủ tiếu",
+      "expect_any": [
+        "hủ tiếu"
+      ],
+      "group": "dish",
+      "intent": {
+        "dishes": [
+          "hủ tiếu"
+        ]
+      }
+    },
+    {
+      "query": "mì quảng",
+      "expect_any": [
+        "mì quảng"
+      ],
+      "group": "dish",
+      "intent": {
+        "dishes": [
+          "mì quảng"
+        ]
+      }
+    },
+    {
+      "query": "bánh canh",
+      "expect_any": [
+        "bánh canh"
+      ],
+      "group": "dish",
+      "intent": {
+        "dishes": [
+          "bánh canh"
+        ]
+      }
+    },
+    {
+      "query": "bún chả",
+      "expect_any": [
+        "bún chả"
+      ],
+      "group": "dish",
+      "intent": {
+        "dishes": [
+          "bún chả"
+        ]
+      }
+    },
+    {
+      "query": "bún riêu",
+      "expect_any": [
+        "bún riêu"
+      ],
+      "group": "dish",
+      "intent": {
+        "dishes": [
+          "bún riêu"
+        ]
+      }
+    },
+    {
+      "query": "cháo lòng",
+      "expect_any": [
+        "cháo"
+      ],
+      "group": "dish"
+    },
+    {
+      "query": "xôi",
+      "expect_any": [
+        "xôi"
+      ],
+      "group": "dish",
+      "intent": {
+        "dishes": [
+          "xôi"
+        ]
+      }
+    },
+    {
+      "query": "bánh cuốn",
+      "expect_any": [
+        "bánh cuốn"
+      ],
+      "group": "dish",
+      "intent": {
+        "dishes": [
+          "bánh cuốn"
+        ]
+      }
+    },
+    {
+      "query": "gỏi cuốn",
+      "expect_any": [
+        "gỏi cuốn",
+        "cuốn"
+      ],
+      "group": "dish"
+    },
+    {
+      "query": "cơm gà",
+      "expect_any": [
+        "cơm gà"
+      ],
+      "group": "dish",
+      "intent": {
+        "dishes": [
+          "cơm gà"
+        ]
+      }
+    },
+    {
+      "query": "vịt quay",
+      "expect_any": [
+        "vịt"
+      ],
+      "group": "dish"
+    },
+    {
+      "query": "lẩu dê",
+      "expect_any": [
+        "dê"
+      ],
+      "group": "dish"
+    },
+    {
+      "query": "đồ chay",
+      "expect_any": [
+        "chay"
+      ],
+      "group": "dish",
+      "intent": {
+        "dishes": [
+          "chay"
+        ]
+      }
+    },
+    {
+      "query": "hải sản",
+      "expect_any": [
+        "hải sản",
+        "ốc"
+      ],
+      "group": "dish"
+    },
+    {
+      "query": "bánh tráng trộn",
+      "expect_any": [
+        "bánh tráng"
+      ],
+      "group": "dish"
+    },
+    {
+      "query": "nem nướng",
+      "expect_any": [
+        "nem"
+      ],
+      "group": "dish"
+    },
+    {
+      "query": "bò kho",
+      "expect_any": [
+        "bò kho"
+      ],
+      "group": "dish"
+    },
+    {
+      "query": "mì trộn",
+      "expect_any": [
+        "mì"
+      ],
+      "group": "dish"
+    },
+    {
+      "query": "kem",
+      "expect_any": [
+        "kem"
+      ],
+      "group": "dish",
+      "intent": {
+        "dishes": [
+          "kem"
+        ]
+      }
+    },
+    {
+      "query": "sinh tố",
+      "expect_any": [
+        "sinh tố"
+      ],
+      "group": "dish",
+      "intent": {
+        "dishes": [
+          "sinh tố"
+        ]
+      }
+    },
+    {
+      "query": "phở quận 3",
+      "expect_any": [
+        "phở"
+      ],
+      "intent": {
+        "dishes": [
+          "phở"
+        ],
+        "districts": [
+          "Quận 3"
+        ]
+      },
+      "group": "slots"
+    },
+    {
+      "query": "cơm tấm quận 10",
+      "expect_any": [
+        "cơm tấm"
+      ],
+      "intent": {
+        "dishes": [
+          "cơm tấm"
+        ],
+        "districts": [
+          "Quận 10"
+        ]
+      },
+      "group": "slots"
+    },
+    {
+      "query": "bún bò ở bình thạnh",
+      "expect_any": [
+        "bún bò"
+      ],
+      "intent": {
+        "dishes": [
+          "bún bò"
+        ],
+        "districts": [
+          "Bình Thạnh"
+        ]
+      },
+      "group": "slots"
+    },
+    {
+      "query": "bún chả hoàn kiếm",
+      "expect_any": [
+        "bún chả"
+      ],
+      "intent": {
+        "dishes": [
+          "bún chả"
+        ],
+        "districts": [
+          "Hoàn Kiếm"
+        ]
+      },
+      "group": "slots"
+    },
+    {
+      "query": "lẩu dưới 300k",
+      "expect_any": [
+        "lẩu"
+      ],
+      "intent": {
+        "dishes": [
+          "lẩu"
+        ],
+        "price_max": 300000.0
+      },
+      "group": "slots"
+    },
+    {
+      "query": "bánh mì dưới 30k",
+      "expect_any": [
+        "bánh mì"
+      ],
+      "intent": {
+        "dishes": [
+          "bánh mì"
+        ],
+        "price_max": 30000.0
+      },
+      "group": "slots"
+    },
+    {
+      "query": "ốc quận 4 dưới 150k",
+      "expect_any": [
+        "ốc"
+      ],
+      "intent": {
+        "dishes": [
+          "ốc"
+        ],
+        "districts": [
+          "Quận 4"
+        ],
+        "price_max": 150000.0
+      },
+      "group": "slots"
+    },
+    {
+      "query": "phở cầu giấy",
+      "expect_any": [
+        "phở"
+      ],
+      "intent": {
+        "dishes": [
+          "phở"
+        ],
+        "districts": [
+          "Cầu Giấy"
+        ]
+      },
+      "group": "slots"
+    },
+    {
+      "query": "hủ tiếu quận 5",
+      "expect_any": [
+        "hủ tiếu"
+      ],
+      "intent": {
+        "dishes": [
+          "hủ tiếu"
+        ],
+        "districts": [
+          "Quận 5"
+        ]
+      },
+      "group": "slots"
+    },
+    {
+      "query": "cà phê hải châu",
+      "expect_any": [
+        "cà phê",
+        "coffee"
+      ],
+      "intent": {
+        "dishes": [
+          "cà phê"
+        ],
+        "districts": [
+          "Hải Châu"
+        ]
+      },
+      "group": "slots"
+    },
+    {
+      "query": "hải sản không cay",
+      "intent": {
+        "exclude": [
+          "cay"
+        ]
+      },
+      "group": "negation"
+    },
+    {
+      "query": "lẩu nhưng không ăn được dê",
+      "intent": {
+        "exclude": [
+          "dê"
+        ]
+      },
+      "group": "negation"
+    },
+    {
+      "query": "bún trừ bún đậu",
+      "intent": {
+        "exclude": [
+          "bún đậu"
+        ]
+      },
+      "group": "negation"
+    },
+    {
+      "query": "phở trên 8 điểm",
+      "intent": {
+        "min_rating": 8.0,
+        "dishes": [
+          "phở"
+        ]
+      },
+      "group": "slots"
+    },
+    {
+      "query": "quán còn mở cửa bây giờ",
+      "intent": {
+        "open_now": true
+      },
+      "group": "slots"
+    },
+    {
+      "query": "phở gần đây",
+      "intent": {
+        "wants_nearby": true,
+        "dishes": [
+          "phở"
+        ]
+      },
+      "group": "slots"
+    },
+    {
+      "query": "quán ăn cho 6 người",
+      "intent": {
+        "party_size": 6
+      },
+      "group": "slots"
+    },
+    {
+      "query": "lẩu từ 200k đến 400k",
+      "intent": {
+        "price_min": 200000.0,
+        "price_max": 400000.0
+      },
+      "group": "slots"
+    },
+    {
+      "query": "quán có chỗ đậu xe ô tô",
+      "intent": {
+        "aspects": [
+          "parking"
+        ]
+      },
+      "group": "aspect"
+    },
+    {
+      "query": "phục vụ nhiệt tình",
+      "intent": {
+        "aspects": [
+          "service"
+        ]
+      },
+      "group": "aspect"
+    },
+    {
+      "query": "quán phở sạch sẽ",
+      "intent": {
+        "aspects": [
+          "hygiene"
+        ],
+        "dishes": [
+          "phở"
+        ]
+      },
+      "group": "aspect"
+    },
+    {
+      "query": "không gian đẹp để chụp ảnh",
+      "intent": {
+        "aspects": [
+          "space"
+        ]
+      },
+      "group": "aspect"
+    },
+    {
+      "query": "giá hợp lý mà đồ ăn ngon",
+      "intent": {
+        "aspects": [
+          "price",
+          "food"
+        ]
+      },
+      "group": "aspect"
+    },
+    {
+      "query": "pho near me",
+      "intent": {
+        "dishes": [
+          "phở"
+        ],
+        "wants_nearby": true
+      },
+      "group": "english"
+    },
+    {
+      "query": "cheap broken rice",
+      "intent": {
+        "dishes": [
+          "cơm tấm"
+        ]
+      },
+      "group": "english"
+    },
+    {
+      "query": "vegetarian food in district 1",
+      "intent": {
+        "districts": [
+          "Quận 1"
+        ]
+      },
+      "group": "english"
+    },
+    {
+      "query": "seafood not spicy",
+      "intent": {
+        "exclude": [
+          "cay"
+        ]
+      },
+      "group": "english"
+    },
+    {
+      "query": "bun bo hue",
+      "intent": {
+        "dishes": [
+          "bún bò huế"
+        ]
+      },
+      "group": "english"
+    },
+    {
+      "query": "hot pot under 200k",
+      "intent": {
+        "price_max": 200000.0
+      },
+      "group": "english"
+    },
+    {
+      "query": "món nước kiểu miền trung ở khu trung tâm giá sinh viên",
+      "intent": {
+        "dishes": [
+          "phở",
+          "bún"
+        ],
+        "adjectives": [
+          "món miền trung"
+        ],
+        "districts": [
+          "Quận 1"
+        ],
+        "price_max": 60000.0
+      },
+      "group": "concept",
+      "min_confidence": 0.8
+    },
+    {
+      "query": "đi date với người yêu, không quá đắt, đừng quá ồn",
+      "intent": {
+        "adjectives": [
+          "hẹn hò",
+          "yên tĩnh"
+        ],
+        "price_max": 150000.0,
+        "aspects": [
+          "space"
+        ]
+      },
+      "group": "concept",
+      "min_confidence": 0.8
+    },
+    {
+      "query": "trời lạnh muốn ăn gì nóng nóng",
+      "intent": {
+        "dishes": [
+          "lẩu",
+          "phở"
+        ]
+      },
+      "group": "concept",
+      "min_confidence": 0.8
+    },
+    {
+      "query": "trời nóng quá uống gì giải nhiệt",
+      "intent": {
+        "dishes": [
+          "chè",
+          "sinh tố"
+        ]
+      },
+      "group": "concept",
+      "min_confidence": 0.8
+    },
+    {
+      "query": "quán cho gia đình có con nhỏ",
+      "intent": {
+        "adjectives": [
+          "gia đình"
+        ]
+      },
+      "group": "concept",
+      "min_confidence": 0.8
+    },
+    {
+      "query": "chỗ tiếp đối tác",
+      "intent": {
+        "adjectives": [
+          "tiếp khách"
+        ],
+        "aspects": [
+          "service"
+        ]
+      },
+      "group": "concept",
+      "min_confidence": 0.8
+    },
+    {
+      "query": "ăn gì cho no mà rẻ",
+      "intent": {
+        "dishes": [
+          "cơm"
+        ]
+      },
+      "group": "concept",
+      "min_confidence": 0.8
+    },
+    {
+      "query": "món khô ở quận 1",
+      "intent": {
+        "dishes": [
+          "cơm",
+          "bánh mì"
+        ],
+        "districts": [
+          "Quận 1"
+        ]
+      },
+      "group": "concept",
+      "min_confidence": 0.8
+    },
+    {
+      "query": "quán ăn khuya ở phố cổ",
+      "intent": {
+        "time_tags": [
+          "ăn đêm"
+        ],
+        "districts": [
+          "Hoàn Kiếm"
+        ]
+      },
+      "group": "concept",
+      "min_confidence": 0.8
+    },
+    {
+      "query": "lai rai với nhóm bạn",
+      "intent": {
+        "adjectives": [
+          "nhậu",
+          "tụ tập"
+        ]
+      },
+      "group": "concept",
+      "min_confidence": 0.8
+    },
+    {
+      "query": "chỗ check in sống ảo",
+      "intent": {
+        "adjectives": [
+          "view đẹp"
+        ],
+        "aspects": [
+          "space"
+        ]
+      },
+      "group": "concept",
+      "min_confidence": 0.8
+    },
+    {
+      "query": "ăn kiêng giảm cân",
+      "intent": {
+        "adjectives": [
+          "healthy"
+        ]
+      },
+      "group": "concept",
+      "min_confidence": 0.8
+    },
+    {
+      "query": "bữa sáng gần trung tâm sài gòn",
+      "intent": {
+        "time_tags": [
+          "sáng"
+        ],
+        "districts": [
+          "Quận 1",
+          "Quận 3"
+        ]
+      },
+      "group": "concept",
+      "min_confidence": 0.8
+    },
+    {
+      "query": "đồ miền tây dân dã",
+      "intent": {
+        "adjectives": [
+          "món miền tây"
+        ]
+      },
+      "group": "concept",
+      "min_confidence": 0.8
+    },
+    {
+      "query": "món bắc cho sinh viên",
+      "intent": {
+        "adjectives": [
+          "món bắc",
+          "bình dân"
+        ],
+        "price_max": 60000.0
+      },
+      "group": "concept",
+      "min_confidence": 0.8
+    },
+    {
+      "query": "liên hoan sinh nhật đông người",
+      "intent": {
+        "adjectives": [
+          "tụ tập"
+        ]
+      },
+      "group": "concept",
+      "min_confidence": 0.8
+    },
+    {
+      "query": "cơm trưa văn phòng quận 3",
+      "intent": {
+        "dishes": [
+          "cơm văn phòng"
+        ],
+        "districts": [
+          "Quận 3"
+        ]
+      },
+      "group": "concept",
+      "min_confidence": 0.8
+    },
+    {
+      "query": "ăn nhẹ buổi chiều",
+      "intent": {
+        "dishes": [
+          "ăn vặt"
+        ]
+      },
+      "group": "concept",
+      "min_confidence": 0.8
+    },
+    {
+      "query": "hẹn hò chỗ yên tĩnh có view đẹp",
+      "intent": {
+        "adjectives": [
+          "hẹn hò",
+          "yên tĩnh",
+          "view đẹp"
+        ]
+      },
+      "group": "concept",
+      "min_confidence": 0.8
+    },
+    {
+      "query": "đồ biển tươi ngon",
+      "intent": {
+        "dishes": [
+          "hải sản"
+        ]
+      },
+      "group": "concept",
+      "min_confidence": 0.8
+    },
+    {
+      "query": "bún bò giá sinh viên dưới 40k",
+      "intent": {
+        "dishes": [
+          "bún bò"
+        ],
+        "price_max": 40000.0
+      },
+      "group": "concept",
+      "min_confidence": 0.8
+    },
+    {
+      "query": "trời lạnh ăn gì nóng nóng",
+      "expect_any": [
+        "lẩu",
+        "phở",
+        "bún",
+        "cháo",
+        "hủ tiếu",
+        "bánh canh"
+      ],
+      "group": "concept"
+    },
+    {
+      "query": "giải nhiệt mùa hè",
+      "expect_any": [
+        "chè",
+        "kem",
+        "sinh tố",
+        "nước ép",
+        "trà"
+      ],
+      "group": "concept"
+    },
+    {
+      "query": "đồ biển",
+      "expect_any": [
+        "hải sản",
+        "ốc"
+      ],
+      "group": "concept"
+    },
+    {
+      "query": "món nước quận 1",
+      "expect_any": [
+        "phở",
+        "bún",
+        "hủ tiếu",
+        "bánh canh",
+        "mì",
+        "miến",
+        "cháo"
+      ],
+      "group": "concept"
+    },
+    {
+      "query": "không phải món nước",
+      "intent": {
+        "dishes": []
+      },
+      "group": "negation",
+      "note": "A negated concept is dropped, not read."
+    },
+    {
+      "query": "quán ăn",
+      "group": "vague",
+      "max_confidence": 0.5
+    },
+    {
+      "query": "ăn gì bây giờ",
+      "group": "vague",
+      "max_confidence": 0.5
+    },
+    {
+      "query": "gợi ý đi",
+      "group": "vague",
+      "max_confidence": 0.5
+    },
+    {
+      "query": "đói quá",
+      "group": "vague",
+      "max_confidence": 0.5
+    },
+    {
+      "query": "muốn ăn gì đó thanh đạm cho nhẹ bụng",
+      "group": "hard",
+      "min_confidence": 0.8,
+      "note": "Not covered yet; tracks what a language-model parser would add."
+    },
+    {
+      "query": "món gì hợp để nhậu với bia",
+      "group": "hard",
+      "min_confidence": 0.8,
+      "note": "Not covered yet; tracks what a language-model parser would add."
+    },
+    {
+      "query": "quán nào nấu giống cơm mẹ nấu",
+      "group": "hard",
+      "min_confidence": 0.8,
+      "note": "Not covered yet; tracks what a language-model parser would add."
+    },
+    {
+      "query": "chỗ nào ngồi lâu làm việc được",
+      "group": "hard",
+      "min_confidence": 0.8,
+      "note": "Not covered yet; tracks what a language-model parser would add."
+    },
+    {
+      "query": "đặc sản cho khách nước ngoài thử",
+      "group": "hard",
+      "min_confidence": 0.8,
+      "note": "Not covered yet; tracks what a language-model parser would add."
+    },
+    {
+      "query": "quán ăn có không khí hoài cổ",
+      "group": "hard",
+      "min_confidence": 0.8,
+      "note": "Not covered yet; tracks what a language-model parser would add."
+    },
+    {
+      "query": "món ăn tốt cho người ốm",
+      "group": "hard",
+      "min_confidence": 0.8,
+      "note": "Not covered yet; tracks what a language-model parser would add."
+    },
+    {
+      "query": "quán ngon mà ít người biết",
+      "group": "hard",
+      "min_confidence": 0.8,
+      "note": "Not covered yet; tracks what a language-model parser would add."
+    },
+    {
+      "query": "chỗ ăn trước khi xem phim ở quận 1",
+      "group": "hard",
+      "min_confidence": 0.8,
+      "note": "Not covered yet; tracks what a language-model parser would add."
+    },
+    {
+      "query": "món gì ăn cho ấm người",
+      "group": "hard",
+      "min_confidence": 0.8,
+      "note": "Not covered yet; tracks what a language-model parser would add."
     }
   ]
 }
