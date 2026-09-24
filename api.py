@@ -18,13 +18,13 @@ import hmac
 import logging
 import time
 from contextlib import asynccontextmanager
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 import chat as chat_engine
 import aspect_index
@@ -139,6 +139,19 @@ class ReviewInsightRequest(BaseModel):
 class ChatMessage(BaseModel):
     role: Literal["user", "bot"]
     text: str = Field(default="", max_length=1000)
+    # The places a bot turn showed, in order, for "quán thứ hai" and the like.
+    ids: list[Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{24}$")]] = Field(
+        default_factory=list, max_length=10
+    )
+
+
+class ChatPrefs(BaseModel):
+    """The signed-in diner's saved tastes. Ranking hints only."""
+
+    favorite_tags: list[Annotated[str, StringConstraints(max_length=40)]] = Field(
+        default_factory=list, max_length=12
+    )
+    home_city: Literal["", "hanoi", "hcmc", "danang"] = ""
 
 
 class ChatRequest(BaseModel):
@@ -147,6 +160,7 @@ class ChatRequest(BaseModel):
     user_gps: list[float] | None = None
     lang: Literal["vi", "en"] = "vi"
     limit: int = Field(default=5, ge=1, le=20)
+    prefs: ChatPrefs | None = None
 
     _check_gps = field_validator("user_gps")(
         RecommendRequest._check_gps.__func__  # reuse the same validation
@@ -353,7 +367,7 @@ async def handle_parse_intent(request: IntentRequest) -> dict:
 @app.post("/chat", response_model=ChatResponse)
 async def handle_chat(request: ChatRequest) -> dict:
     history = [
-        chat_engine.ChatTurn(role=item.role, text=item.text)
+        chat_engine.ChatTurn(role=item.role, text=item.text, ids=list(item.ids))
         for item in request.history
     ]
     outcome = chat_engine.respond(
@@ -362,6 +376,7 @@ async def handle_chat(request: ChatRequest) -> dict:
         user_gps=request.user_gps,
         lang=request.lang,
         limit=request.limit,
+        prefs=request.prefs.model_dump() if request.prefs else None,
     )
     return {
         "reply": outcome["reply"],

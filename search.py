@@ -536,6 +536,35 @@ def _diversify(frame: pd.DataFrame, intent: Intent) -> pd.DataFrame:
     return pd.concat([head.iloc[chosen], frame.iloc[depth:]])
 
 
+# Taste nudges. Small next to a matched dish (W_DISH_TAG 1.2) so a saved taste
+# for phở never pulls phở above the bún bò that was asked for; enough to break
+# ties among places that all fit the question.
+W_PREFERENCE_TAG = 0.25
+W_PREFERENCE_TAG_MAX = 0.5
+W_HOME_CITY = 0.4
+HOME_CITY_NAMES = {"hanoi": "Hà Nội", "hcmc": "TPHCM", "danang": "Đà Nẵng"}
+
+
+def _preference_boost(
+    frame: pd.DataFrame, intent: Intent, prefs: dict | None, has_gps: bool
+) -> np.ndarray:
+    boost = np.zeros(len(frame), dtype="float32")
+    if not prefs or frame.empty:
+        return boost
+    tags = [tu.normalize(t) for t in (prefs.get("favorite_tags") or [])[:12] if t]
+    if tags:
+        blob = frame["tags_norm"].to_numpy()
+        for i, text in enumerate(blob):
+            hits = sum(1 for tag in tags if tag and tag in text)
+            boost[i] += min(W_PREFERENCE_TAG_MAX, W_PREFERENCE_TAG * hits)
+    # The home city stands in for a location only when the query names no
+    # place and the device sent none.
+    city = HOME_CITY_NAMES.get(str(prefs.get("home_city") or ""))
+    if city and not has_gps and not intent.districts and not intent.cities:
+        boost += np.where(frame["city"].to_numpy() == city, W_HOME_CITY, 0.0).astype("float32")
+    return boost
+
+
 def _names_contain(frame: pd.DataFrame, text: str) -> bool:
     """Whether ``text`` (accent-insensitive) appears in any restaurant name."""
     folded = tu.fold(text or "").strip()
@@ -559,8 +588,13 @@ def search(
     city_filter: str | None = None,
     limit: int | None = None,
     candidate_ids: list[str] | None = None,
+    prefs: dict | None = None,
 ) -> SearchResult:
-    """Run the full filter-then-rank pipeline for ``query``."""
+    """Run the full filter-then-rank pipeline for ``query``.
+
+    ``prefs`` -- the signed-in diner's saved tastes and home city -- only nudge
+    the order; they never remove a result.
+    """
     store.ensure_fresh()
     frame = store.frame
     has_gps = bool(user_gps and len(user_gps) == 2)
@@ -655,6 +689,7 @@ def search(
     total_scores, content_scores, semantic_scores = _relevance(
         working, intent, dish_matched
     )
+    total_scores = total_scores + _preference_boost(working, intent, prefs, has_gps)
     working = working.assign(relevance=total_scores)
 
     # Two cases where a result set has to be proven relevant rather than just

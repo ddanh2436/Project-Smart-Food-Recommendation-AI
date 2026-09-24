@@ -120,6 +120,7 @@ ASPECT_CUES: dict[str, list[str]] = {
         "phục vụ chu đáo", "thái độ tốt", "good service", "friendly staff",
     ],
     "parking": [
+        "chỗ đậu xe ô tô", "chỗ để ô tô", "chỗ đỗ ô tô",
         "chỗ đậu xe", "chỗ để xe", "chỗ gửi xe", "bãi đậu xe", "bãi xe",
         "đậu ô tô", "đỗ ô tô", "parking",
     ],
@@ -168,6 +169,11 @@ ASPECT_CUES_SORTED = sorted(
     reverse=True,
 )
 
+# One-syllable cuisine tags that are also ordinary word endings ("gợi ý",
+# "thẩm mỹ", "lo âu"), and the words that make them a cuisine.
+CUISINE_WORDS = {"ý", "mỹ", "âu"}
+CUISINE_LEADS = "món|đồ|ẩm thực|kiểu|nhà hàng|quán|cơm|mì|mỳ|bánh|đồ ăn|món ăn|phong cách"
+
 STOPWORDS = [
     # Vietnamese
     "quán", "tiệm", "nhà hàng", "hàng", "chỗ", "địa điểm", "khu vực", "khu",
@@ -177,6 +183,7 @@ STOPWORDS = [
     "ở", "tại", "vùng", "gần", "đồ", "món", "loại", "kiểu",
     "gì", "nào", "đó", "này", "thì", "là", "có", "được", "hơi", "khá",
     "mà", "nhưng", "nhé", "nha", "ạ", "đi", "cái", "chút", "còn",
+    "gợi ý", "một vài", "vài", "mấy", "buổi", "bữa", "hôm nay", "nay", "hãy",
     "giá", "mức giá", "điểm", "sao", "người", "phần", "suất",
     "nhất", "rất", "lắm", "quá", "hơn", "trên", "dưới", "khoảng", "tầm",
     # English
@@ -251,6 +258,10 @@ class Intent:
     # a query read with confidence needs neither.
     confidence: float = 1.0
     uncertainties: list[str] = field(default_factory=list)
+    # Aspect cues the query negated ("không sạch sẽ"). Read and deliberately
+    # dropped: they count as understood, so the query is not handed to a
+    # language model that might read the negation the other way.
+    negated_aspects: list[str] = field(default_factory=list)
 
     @property
     def has_constraints(self) -> bool:
@@ -474,6 +485,7 @@ def _score_confidence(intent: Intent) -> None:
         len(intent.dishes) + len(intent.districts) + len(intent.cities)
         + len(intent.adjectives) + len(intent.time_tags) + len(intent.exclude)
         + len(intent.aspects) + len(intent.aspect_avoid) + len(intent.concepts)
+        + len(intent.negated_aspects)
         + int(intent.price_min is not None or intent.price_max is not None)
         + int(intent.min_rating is not None)
         + int(intent.open_now) + int(intent.wants_nearby)
@@ -578,7 +590,13 @@ def parse_intent(query: str, has_gps: bool = False) -> Intent:
         pattern = rf"(?<!\w){re.escape(cue)}(?!\w)"
         if not re.search(pattern, stripped, re.IGNORECASE):
             continue
+        # Consumed once read, so the words are not counted again as unread --
+        # except cues that are also tags ("yên tĩnh"), which step 6 still needs.
+        if cue not in kb.CANDIDATE_TAGS:
+            stripped = re.sub(pattern, " ", stripped, flags=re.IGNORECASE)
         if _is_negated(translated, cue, negations):
+            if key not in intent.negated_aspects:
+                intent.negated_aspects.append(key)
             continue
         if key not in intent.aspects:
             intent.aspects.append(key)
@@ -613,6 +631,10 @@ def parse_intent(query: str, has_gps: bool = False) -> Intent:
     # 6. Tags. Longest first, consuming each match.
     for tag in kb.CANDIDATE_TAGS_SORTED:
         pattern = rf"(?<!\w){re.escape(tag)}(?!\w)"
+        if tag in CUISINE_WORDS:
+            # "gợi ý" is not Italian food, nor "thẩm mỹ" American: these
+            # one-syllable cuisines count only after a word that makes them one.
+            pattern = rf"(?<!\w)(?:{CUISINE_LEADS})\s+{re.escape(tag)}(?!\w)"
         if not re.search(pattern, remaining, re.IGNORECASE):
             continue
         remaining = re.sub(pattern, " ", remaining, flags=re.IGNORECASE)

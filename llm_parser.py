@@ -132,6 +132,7 @@ def enabled() -> bool:
 
 def status() -> dict:
     return {
+        "ready": enabled(),
         "enabled": enabled(),
         "model": settings.llm_model if enabled() else None,
         "calls_today": _budget.used,
