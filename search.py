@@ -119,6 +119,14 @@ ASPECT_MIN_MENTIONS = 3.0
 # Rows farther than this are dropped when the user asked for "near me".
 NEARBY_RADIUS_KM = 20.0
 
+# With a known position and no place named, results stay local. Measured from
+# Quận 1: "lẩu" led with a Cần Thơ place 131 km away and listed one in Đà Nẵng
+# 610 km away, and "trời mưa nên ăn gì" put Khánh Hòa (303 km) second -- the
+# proximity prior is small next to the rating prior, so it never won. Each
+# radius is tried in turn and kept if it leaves enough to choose from.
+DEFAULT_RADII_KM = (15.0, 50.0)
+MIN_LOCAL_RESULTS = 5
+
 # Minimum query-match evidence (priors excluded) for a result to count as a
 # real hit. char-ngram TF-IDF gives every row a small non-zero score, so the
 # floor has to sit above that noise rather than at zero.
@@ -197,6 +205,25 @@ def _apply_filter(
     if len(filtered) >= minimum:
         return filtered
     relaxed.append(label)
+    return frame
+
+
+def _apply_radius(
+    frame: pd.DataFrame, radii: tuple[float, ...], relaxed: list[str]
+) -> pd.DataFrame:
+    """Keep the nearest radius that still leaves a real choice.
+
+    Short of a real choice, a few local places still beat a list led by one
+    in another province: "lẩu mắm" from Quận 1 has three within 50 km, and
+    without this the Cần Thơ ones 131 km away took the top of the list.
+    """
+    for radius in radii:
+        mask = frame["distance_km"] <= radius
+        if mask.sum() >= MIN_LOCAL_RESULTS:
+            return frame[mask]
+    if mask.any():
+        return frame[mask]
+    relaxed.append("radius")
     return frame
 
 
@@ -452,7 +479,8 @@ def _order(frame: pd.DataFrame, intent: Intent) -> pd.DataFrame:
             _price_key=frame["price"].replace(0, np.nan)
         )
         return frame.sort_values(
-            ["_price_key", "rating"], ascending=[True, False], na_position="last"
+            ["_price_key", "rating_adjusted"], ascending=[True, False],
+            na_position="last",
         ).drop(columns="_price_key")
     if intent.sort_by == "rating":
         # "ngon nhất" should mean reliably well rated, so order by the shrunk
@@ -689,6 +717,21 @@ def search(
     if intent.open_now:
         mask = working["opening_hours"].apply(_is_open_now)
         working = _apply_filter(working, mask, "open_now", relaxed)
+
+    # Last, so the radius widens for a rare dish instead of the dish filter
+    # giving up on it. Not for a name search: "Phở Thìn Lò Đúc" asked from
+    # Saigon means the Hà Nội shop. `name_like` alone is not that evidence --
+    # it is set by any two unread words, "buồn nên" included -- so the words
+    # must actually be in a name.
+    if (
+        has_gps
+        and location_mask is None
+        and not city_filter
+        and not candidate_ids
+        and intent.sort_by != "distance"
+        and not (intent.name_like and _names_contain(frame, intent.free_text))
+    ):
+        working = _apply_radius(working, DEFAULT_RADII_KM, relaxed)
 
     total_before_ranking = len(working)
     if working.empty:
