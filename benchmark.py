@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import statistics
 import time
@@ -89,13 +90,49 @@ def distinct_dishes(items: list[dict]) -> int:
     return len(seen)
 
 
-def run(cases: list[dict], top_k: int = 5) -> dict:
+IR_DEPTH = 10
+
+
+def ir_scores(ids: list[str], query: dict) -> dict | None:
+    """nDCG@10, recall@10 and reciprocal rank against one query's qrels.
+
+    None while the query has no grade at all (a pool nobody has judged yet).
+    On a complete query an ID missing from the judgments is a judged 0; on a
+    pooled one it is unknown, which `judged` reports so a high score over an
+    unjudged top 10 is not mistaken for a good one.
+    """
+    grades = {j["id"]: j["grade"] for j in query["judgments"] if j["grade"] is not None}
+    if not grades:
+        return None
+    known = {j["id"] for j in query["judgments"] if j["grade"] is not None}
+    top = ids[:IR_DEPTH]
+    gains = [grades.get(i, 0) for i in top]
+    dcg = sum((2 ** g - 1) / math.log2(r + 2) for r, g in enumerate(gains))
+    ideal = sorted(grades.values(), reverse=True)[:IR_DEPTH]
+    idcg = sum((2 ** g - 1) / math.log2(r + 2) for r, g in enumerate(ideal))
+    relevant = {i for i, g in grades.items() if g > 0}
+    best = max(grades.values())
+    rr = next((1 / (r + 1) for r, g in enumerate(gains) if g == best and g > 0), 0.0)
+    return {
+        "ndcg": dcg / idcg if idcg else 0.0,
+        # Normalised by what fits in 10, or "phở" with 350 relevant places
+        # could never score above 0.03.
+        "recall": (len(relevant & set(top)) / min(IR_DEPTH, len(relevant))) if relevant else 0.0,
+        "rr": rr,
+        "judged": 1.0 if query["complete"] else (
+            sum(1 for i in top if i in known) / len(top) if top else 1.0
+        ),
+    }
+
+
+def run(cases: list[dict], top_k: int = 5, qrels: dict | None = None) -> dict:
     results = {
         "cases": len(cases),
         "top1": 0, "top5": 0, "scored": 0,
         "zero_results": 0, "relaxed": 0,
         "intent_checked": 0, "intent_ok": 0,
         "errors": 0,
+        "ir": [],
     }
     latencies: list[float] = []
     failures: list[str] = []
@@ -111,14 +148,15 @@ def run(cases: list[dict], top_k: int = 5) -> dict:
         tally = groups.setdefault(group, [0, 0])
         tally[1] += 1
         failed_before = len(failures)
-        _run_case(case, query, top_k, results, latencies, failures, confidences)
+        _run_case(case, query, top_k, results, latencies, failures, confidences,
+                  (qrels or {}).get((query, tuple(case.get("user_gps") or ()))))
         if len(failures) == failed_before:
             tally[0] += 1
 
     return _finish(results, latencies, failures, groups, confidences, cases)
 
 
-def _run_case(case, query, top_k, results, latencies, failures, confidences):
+def _run_case(case, query, top_k, results, latencies, failures, confidences, qrel=None):
     if True:
         # The language-model parser runs on a free tier limited per minute;
         # the "hard" cases are the ones that reach it, so they are spaced out.
@@ -127,7 +165,9 @@ def _run_case(case, query, top_k, results, latencies, failures, confidences):
         started = time.time()
         try:
             response = requests.post(
-                f"{API}/recommend", json={"query": query, "limit": top_k},
+                f"{API}/recommend",
+                json={"query": query, "limit": max(top_k, IR_DEPTH),
+                      "user_gps": case.get("user_gps")},
                 headers=HEADERS, timeout=60,
             )
             latencies.append((time.time() - started) * 1000)
@@ -141,7 +181,19 @@ def _run_case(case, query, top_k, results, latencies, failures, confidences):
             failures.append(f"{query}: {exc}")
             return
 
-        items = payload.get("scores", [])[:top_k]
+        ranked = payload.get("scores", [])
+        if qrel:
+            scores = ir_scores([item.get("id", "") for item in ranked], qrel)
+            if scores:
+                results["ir"].append(scores)
+        if case.get("max_km") is not None:
+            far = [i for i in ranked[:IR_DEPTH] if i.get("distance_km", 0) > case["max_km"]]
+            if far:
+                failures.append(
+                    f"{query}: {len(far)} of top {IR_DEPTH} beyond {case['max_km']} km "
+                    f"(e.g. {far[0].get('name', '')[:30]} at {far[0]['distance_km']} km)"
+                )
+        items = ranked[:top_k]
         # A case that asserts emptiness is not a zero-result problem; counting
         # it as one made the rate report a success as a failure.
         if not items and not case.get("expect_empty"):
@@ -230,6 +282,12 @@ def _finish(results, latencies, failures, groups, confidences, cases):
         ) if len(latencies) >= 2 else 0,
         "errors": results["errors"],
     }
+    ir = results.pop("ir")
+    if ir:
+        for key, name in (("ndcg", "ndcg@10"), ("recall", "recall@10"),
+                          ("rr", "mrr@10"), ("judged", "judged@10")):
+            results["metrics"][name] = round(statistics.mean(s[key] for s in ir) * 100, 2)
+        results["metrics"]["ir_queries"] = len(ir)
     results["failures"] = failures
     results["groups"] = {name: {"passed": p, "total": t} for name, (p, t) in groups.items()}
     if confidences:
@@ -250,6 +308,11 @@ HIGHER_IS_BETTER = {
     "latency_p95_ms": False,
     "errors": False,
     "low_confidence_rate": False,
+    "ndcg@10": True,
+    "recall@10": True,
+    "mrr@10": True,
+    "judged@10": True,
+    "ir_queries": True,
 }
 
 
@@ -303,13 +366,23 @@ def report(current: dict, baseline: dict | None) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cases", default=str(BASE / "search_eval.json"))
+    parser.add_argument("--qrels", default=str(BASE / "search_qrels.json"),
+                        help="restaurant-ID judgments from build_qrels.py")
     parser.add_argument("--save", help="write this run to a file as a baseline")
     parser.add_argument("--against", help="compare with a saved baseline")
     parser.add_argument("--top-k", type=int, default=5)
     args = parser.parse_args()
 
     cases = json.loads(Path(args.cases).read_text(encoding="utf-8"))["cases"]
-    current = run(cases, top_k=args.top_k)
+    qrels_path = Path(args.qrels)
+    qrels = (
+        {(q["query"], tuple(q.get("user_gps") or ())): q
+         for q in json.loads(qrels_path.read_text(encoding="utf-8"))["queries"]}
+        if qrels_path.exists() else None
+    )
+    if qrels is None:
+        print(f"{YELLOW}No qrels at {qrels_path}: run build_qrels.py for nDCG/recall.{END}")
+    current = run(cases, top_k=args.top_k, qrels=qrels)
 
     baseline = None
     if args.against:
