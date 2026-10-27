@@ -64,6 +64,16 @@ class Settings:
         "EMBEDDING_MODEL",
         "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
     ).strip()
+    # e5 models want "query: " / "passage: "; MiniLM and bge-m3 want nothing.
+    # Not stripped: the trailing space is part of the prefix.
+    embedding_query_prefix: str = os.getenv("EMBEDDING_QUERY_PREFIX", "")
+    embedding_passage_prefix: str = os.getenv("EMBEDDING_PASSAGE_PREFIX", "")
+    # gte-multilingual ships its own model code; only enable for a model you trust.
+    embedding_trust_remote_code: bool = _flag("EMBEDDING_TRUST_REMOTE_CODE", False)
+    # Row vectors keyed by model and text, so a reload encodes only new rows.
+    embedding_cache_path: str = os.getenv(
+        "EMBEDDING_CACHE_PATH", "embeddings_cache.npz"
+    ).strip()
 
     # --- Feature switches ---
     # Semantic search loads a ~120MB embedding model. Turn it off on a

@@ -29,7 +29,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 
 import knowledge as kb
 import text_utils as tu
-from config import settings
+from config import BASE_DIR, settings
 
 logger = logging.getLogger(__name__)
 
@@ -319,17 +319,21 @@ class RestaurantStore:
             frame["aspects"] if "aspects" in frame.columns else pd.Series([None] * len(frame))
         )
         for key in ASPECT_KEYS:
-            ratios, mentions = [], []
+            ratios, mentions, verdicts = [], [], []
             for value in raw_aspects:
                 entry = value.get(key) if isinstance(value, dict) else None
                 if isinstance(entry, dict):
                     ratios.append(float(entry.get("positive_ratio") or 0.0))
                     mentions.append(float(entry.get("mentions") or 0.0))
+                    verdicts.append(str(entry.get("verdict") or ""))
                 else:
                     ratios.append(0.0)
                     mentions.append(0.0)
+                    verdicts.append("")
             frame[f"aspect_{key}"] = ratios
             frame[f"aspect_{key}_n"] = mentions
+            # Read, not recomputed: review_insights.verdict is the one rule.
+            frame[f"aspect_{key}_verdict"] = verdicts
 
         frame["district"] = frame["address"].apply(extract_district)
         frame["city"] = [
@@ -402,24 +406,63 @@ class RestaurantStore:
                 from sentence_transformers import SentenceTransformer
 
                 logger.info("Loading embedding model %s", settings.embedding_model)
-                self._embedder = SentenceTransformer(settings.embedding_model)
+                self._embedder = SentenceTransformer(
+                    settings.embedding_model,
+                    trust_remote_code=settings.embedding_trust_remote_code,
+                )
 
             texts = [
-                f"{name}. {tags}".strip(". ")
+                settings.embedding_passage_prefix + f"{name}. {tags}".strip(". ")
                 for name, tags in zip(self._frame["name"], self._frame["tags"])
             ]
-            self._embeddings = self._embedder.encode(
-                texts,
-                batch_size=64,
-                convert_to_numpy=True,
-                normalize_embeddings=True,
-                show_progress_bar=False,
-            ).astype("float32")
+            self._embeddings = self._encode_cached(texts)
             self._embedding_error = None
         except Exception as exc:  # noqa: BLE001 - optional feature
             logger.warning("Semantic index unavailable, using TF-IDF only: %s", exc)
             self._embeddings = None
             self._embedding_error = str(exc)
+
+    def _encode_cached(self, texts: list[str]) -> np.ndarray:
+        """Encode only the rows whose text is not already in the cache file.
+
+        Every reload re-encoded all ~5,500 rows: 79 s at startup on the free
+        CPU Space, repeated each DATA_REFRESH_SECONDS. Vectors are now keyed by
+        model and text, so a reload encodes only new or edited rows, and a
+        cache built on a Kaggle GPU (see kaggle/README.md) is picked up as is.
+        """
+        path = BASE_DIR / settings.embedding_cache_path
+        cached: dict[str, np.ndarray] = {}
+        try:
+            with np.load(path, allow_pickle=False) as data:
+                if str(data["model"]) == settings.embedding_model:
+                    cached = dict(zip(data["texts"].tolist(), data["vectors"]))
+        except FileNotFoundError:
+            pass
+        except Exception as exc:  # noqa: BLE001 - a bad cache is just a miss
+            logger.warning("Ignoring embedding cache %s: %s", path, exc)
+
+        missing = sorted({text for text in texts if text not in cached})
+        if missing:
+            logger.info("Encoding %d of %d rows", len(missing), len(texts))
+            vectors = self._embedder.encode(
+                missing,
+                batch_size=64,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+                show_progress_bar=False,
+            ).astype("float32")
+            cached.update(zip(missing, vectors))
+            keep = sorted(set(texts))
+            try:
+                np.savez(
+                    path,
+                    model=np.array(settings.embedding_model),
+                    texts=np.array(keep),
+                    vectors=np.stack([cached[text] for text in keep]),
+                )
+            except OSError as exc:  # read-only disk: still serve from memory
+                logger.warning("Could not write embedding cache: %s", exc)
+        return np.stack([cached[text] for text in texts]).astype("float32")
 
     def semantic_scores(self, query: str) -> np.ndarray:
         """Cosine similarity in embedding space, or zeros when unavailable."""
@@ -428,7 +471,7 @@ class RestaurantStore:
                 return np.zeros(len(self._frame), dtype="float32")
             try:
                 vector = self._embedder.encode(
-                    [query],
+                    [settings.embedding_query_prefix + query],
                     convert_to_numpy=True,
                     normalize_embeddings=True,
                     show_progress_bar=False,

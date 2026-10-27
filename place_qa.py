@@ -227,10 +227,13 @@ def _aspect_line(row: dict, topic: str, lang: str) -> str:
             return f"Chưa đủ đánh giá nhắc tới {label} để nói chắc.{score_text}"
         return f"Not enough reviews mention {label} to say.{score_text}"
     percent = round(ratio * 100)
+    # The stored verdict, so this answer and the restaurant page cannot
+    # disagree; a ratio alone also cannot tell neutral mentions from complaints.
+    kind = str(row.get(f"aspect_{topic}_verdict", "") or "mixed")
     if lang == "vi":
-        verdict = "được khen" if ratio >= 0.7 else "hay bị chê" if ratio <= 0.3 else "ý kiến trái chiều"
+        verdict = {"positive": "được khen", "negative": "hay bị chê"}.get(kind, "ý kiến trái chiều")
         return f"Về {label}: {verdict} — {percent}% trong {mentions} lượt nhắc là tích cực.{score_text}"
-    verdict = "praised" if ratio >= 0.7 else "often criticised" if ratio <= 0.3 else "mixed"
+    verdict = {"positive": "praised", "negative": "often criticised"}.get(kind, "mixed")
     return f"{label.capitalize()}: {verdict} — {percent}% of {mentions} mentions positive.{score_text}"
 
 

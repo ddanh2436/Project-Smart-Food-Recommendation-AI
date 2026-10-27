@@ -1358,6 +1358,55 @@
       ],
       "group": "regression",
       "note": "As above."
+    },
+    {
+      "query": "Hôm nay mình hơi buồn, trời mưa, nên ăn gì?",
+      "user_gps": [
+        10.7769,
+        106.7009
+      ],
+      "max_km": 50,
+      "group": "distance",
+      "note": "Client report: ranked a Khánh Hòa place (303 km) second. Two unread words set name_like, which skipped the radius."
+    },
+    {
+      "query": "lẩu",
+      "user_gps": [
+        10.7769,
+        106.7009
+      ],
+      "max_km": 50,
+      "expect_any": [
+        "lẩu"
+      ],
+      "group": "distance",
+      "note": "Led with Cần Thơ (131 km) and listed Đà Nẵng (610 km) before the default radius."
+    },
+    {
+      "query": "lẩu mắm",
+      "user_gps": [
+        10.7769,
+        106.7009
+      ],
+      "max_km": 50,
+      "expect_any": [
+        "lẩu mắm"
+      ],
+      "group": "distance",
+      "note": "Only 3 places within 50 km; they must be kept rather than relaxed to the whole country."
+    },
+    {
+      "query": "Phở Thìn Lò Đúc",
+      "user_gps": [
+        10.7769,
+        106.7009
+      ],
+      "expect_top1": [
+        "thìn",
+        "lò đúc"
+      ],
+      "group": "distance",
+      "note": "A name search ignores the radius: from Saigon it still means the Hà Nội shop."
     }
   ]
 }
