@@ -187,14 +187,25 @@ def _aspects_of(clause: str) -> list[str]:
     return []
 
 
-def _verdict(positive: int, negative: int) -> str:
-    total = positive + negative
-    if total == 0:
+# One rule for every aspect verdict on the site, taken on the share the card
+# prints. It used to be taken over positive + negative only while the card
+# showed positive / all mentions, so two praising and two neutral clauses
+# about price were listed under strengths beside "50% tích cực", while food
+# at 58% was "trái chiều".
+PRAISED_SHARE = 0.7
+CRITICISED_SHARE = 0.3
+
+
+def verdict(positive: int, negative: int, neutral: int = 0) -> str:
+    mentions = positive + negative + neutral
+    if mentions == 0:
         return "mixed"
-    ratio = positive / total
-    if ratio >= 0.7:
+    share = positive / mentions
+    if share >= PRAISED_SHARE:
         return "positive"
-    if ratio <= 0.3:
+    # Neutral clauses are not complaints: "giá 50k" said five times is no
+    # verdict against the price, so criticism needs more negatives than positives.
+    if share <= CRITICISED_SHARE and negative > positive:
         return "negative"
     return "mixed"
 
@@ -278,10 +289,10 @@ def summarize_reviews(reviews: list[dict], lang: str = "vi") -> dict:
         mentions = bucket["positive"] + bucket["negative"] + bucket["neutral"]
         if mentions < MIN_MENTIONS:
             continue
-        verdict = _verdict(bucket["positive"], bucket["negative"])
+        aspect_verdict = verdict(bucket["positive"], bucket["negative"], bucket["neutral"])
         # Quote the most confident clause matching the verdict, so the example
         # supports the headline rather than contradicting it.
-        wanted = {"positive": "POS", "negative": "NEG"}.get(verdict)
+        wanted = {"positive": "POS", "negative": "NEG"}.get(aspect_verdict)
         candidates = [
             quote for quote in bucket["quotes"]
             if wanted is None or quote["label"] == wanted
@@ -310,7 +321,7 @@ def summarize_reviews(reviews: list[dict], lang: str = "vi") -> dict:
             "neutral": bucket["neutral"],
             "negative": bucket["negative"],
             "positive_ratio": round(positive_ratio, 3),
-            "verdict": verdict,
+            "verdict": aspect_verdict,
             "quotes": quotes,
         })
 

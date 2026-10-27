@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Offline self-checks for the radius fallback and the embedding cache.
+"""Offline self-checks for the radius fallback, the embedding cache and the
+review verdicts.
 
 No server, database or model needed:  python test_ranking.py
 """
@@ -66,7 +67,22 @@ def check_embedding_cache() -> None:
         assert store._embedder.encoded == ["phở"]
 
 
+def check_verdict() -> None:
+    from review_insights import verdict
+
+    # Client report: price at 2 praising + 2 neutral showed "50%" under strengths.
+    assert verdict(2, 0, 2) == "mixed"
+    # Food at 58% positive is mixed, and now by the same rule as price.
+    assert verdict(7, 5, 0) == "mixed"
+    assert verdict(7, 1, 2) == "positive"
+    assert verdict(1, 6, 1) == "negative"
+    # Only neutral mentions are not a complaint.
+    assert verdict(0, 0, 5) == "mixed"
+    assert verdict(0, 0, 0) == "mixed"
+
+
 if __name__ == "__main__":
     check_radius()
     check_embedding_cache()
+    check_verdict()
     print("ranking self-checks passed")

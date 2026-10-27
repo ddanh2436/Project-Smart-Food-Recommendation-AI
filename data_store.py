@@ -319,17 +319,21 @@ class RestaurantStore:
             frame["aspects"] if "aspects" in frame.columns else pd.Series([None] * len(frame))
         )
         for key in ASPECT_KEYS:
-            ratios, mentions = [], []
+            ratios, mentions, verdicts = [], [], []
             for value in raw_aspects:
                 entry = value.get(key) if isinstance(value, dict) else None
                 if isinstance(entry, dict):
                     ratios.append(float(entry.get("positive_ratio") or 0.0))
                     mentions.append(float(entry.get("mentions") or 0.0))
+                    verdicts.append(str(entry.get("verdict") or ""))
                 else:
                     ratios.append(0.0)
                     mentions.append(0.0)
+                    verdicts.append("")
             frame[f"aspect_{key}"] = ratios
             frame[f"aspect_{key}_n"] = mentions
+            # Read, not recomputed: review_insights.verdict is the one rule.
+            frame[f"aspect_{key}_verdict"] = verdicts
 
         frame["district"] = frame["address"].apply(extract_district)
         frame["city"] = [
