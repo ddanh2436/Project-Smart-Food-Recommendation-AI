@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """Score the search against search_eval.json, and compare runs.
 
-`evaluate_search.py` answers one question — did anything relevant show up in
-the top five — which is the right first question and not enough on its own.
-Two changes in this codebase passed that check while breaking something else:
+"Did anything relevant show up in the top five" is the right first question
+and not enough on its own (it was all the old evaluate_search.py asked). Two
+changes in this codebase passed that check while breaking something else:
 raising the rating weight globally kept the pass rate up while turning a search
 for "Phở Thìn Lò Đúc" into "Phở Cần Thơ", and a relevance floor set inside the
 TF-IDF noise band let nonsense queries return the whole database.
@@ -157,111 +157,110 @@ def run(cases: list[dict], top_k: int = 5, qrels: dict | None = None) -> dict:
 
 
 def _run_case(case, query, top_k, results, latencies, failures, confidences, qrel=None):
-    if True:
-        # The language-model parser runs on a free tier limited per minute;
-        # the "hard" cases are the ones that reach it, so they are spaced out.
-        if case.get("group") == "hard":
-            time.sleep(float(os.getenv("BENCH_LLM_SPACING", "4")))
-        started = time.time()
-        try:
-            response = requests.post(
-                f"{API}/recommend",
-                json={"query": query, "limit": max(top_k, IR_DEPTH),
-                      "user_gps": case.get("user_gps")},
-                headers=HEADERS, timeout=60,
-            )
-            latencies.append((time.time() - started) * 1000)
-            if response.status_code != 200:
-                results["errors"] += 1
-                failures.append(f"{query}: HTTP {response.status_code}")
-                return
-            payload = response.json()
-        except Exception as exc:  # noqa: BLE001
+    # The language-model parser runs on a free tier limited per minute;
+    # the "hard" cases are the ones that reach it, so they are spaced out.
+    if case.get("group") == "hard":
+        time.sleep(float(os.getenv("BENCH_LLM_SPACING", "4")))
+    started = time.time()
+    try:
+        response = requests.post(
+            f"{API}/recommend",
+            json={"query": query, "limit": max(top_k, IR_DEPTH),
+                  "user_gps": case.get("user_gps")},
+            headers=HEADERS, timeout=60,
+        )
+        latencies.append((time.time() - started) * 1000)
+        if response.status_code != 200:
             results["errors"] += 1
-            failures.append(f"{query}: {exc}")
+            failures.append(f"{query}: HTTP {response.status_code}")
             return
+        payload = response.json()
+    except Exception as exc:  # noqa: BLE001
+        results["errors"] += 1
+        failures.append(f"{query}: {exc}")
+        return
 
-        ranked = payload.get("scores", [])
-        if qrel:
-            scores = ir_scores([item.get("id", "") for item in ranked], qrel)
-            if scores:
-                results["ir"].append(scores)
-        if case.get("max_km") is not None:
-            far = [i for i in ranked[:IR_DEPTH] if i.get("distance_km", 0) > case["max_km"]]
-            if far:
-                failures.append(
-                    f"{query}: {len(far)} of top {IR_DEPTH} beyond {case['max_km']} km "
-                    f"(e.g. {far[0].get('name', '')[:30]} at {far[0]['distance_km']} km)"
-                )
-        items = ranked[:top_k]
-        # A case that asserts emptiness is not a zero-result problem; counting
-        # it as one made the rate report a success as a failure.
-        if not items and not case.get("expect_empty"):
-            results["zero_results"] += 1
-        if payload.get("relaxed_filters"):
-            results["relaxed"] += 1
+    ranked = payload.get("scores", [])
+    if qrel:
+        scores = ir_scores([item.get("id", "") for item in ranked], qrel)
+        if scores:
+            results["ir"].append(scores)
+    if case.get("max_km") is not None:
+        far = [i for i in ranked[:IR_DEPTH] if i.get("distance_km", 0) > case["max_km"]]
+        if far:
+            failures.append(
+                f"{query}: {len(far)} of top {IR_DEPTH} beyond {case['max_km']} km "
+                f"(e.g. {far[0].get('name', '')[:30]} at {far[0]['distance_km']} km)"
+            )
+    items = ranked[:top_k]
+    # A case that asserts emptiness is not a zero-result problem; counting
+    # it as one made the rate report a success as a failure.
+    if not items and not case.get("expect_empty"):
+        results["zero_results"] += 1
+    if payload.get("relaxed_filters"):
+        results["relaxed"] += 1
 
-        confidence = (payload.get("intent") or {}).get("confidence")
-        if isinstance(confidence, (int, float)):
-            confidences.append(float(confidence))
-            if "min_confidence" in case and confidence < case["min_confidence"]:
-                failures.append(f"{query}: confidence {confidence} < {case['min_confidence']}")
-            if "max_confidence" in case and confidence > case["max_confidence"]:
-                failures.append(f"{query}: confidence {confidence} > {case['max_confidence']}")
+    confidence = (payload.get("intent") or {}).get("confidence")
+    if isinstance(confidence, (int, float)):
+        confidences.append(float(confidence))
+        if "min_confidence" in case and confidence < case["min_confidence"]:
+            failures.append(f"{query}: confidence {confidence} < {case['min_confidence']}")
+        if "max_confidence" in case and confidence > case["max_confidence"]:
+            failures.append(f"{query}: confidence {confidence} > {case['max_confidence']}")
 
-        if case.get("intent"):
-            results["intent_checked"] += 1
-            problems = check_intent(payload.get("intent") or {}, case["intent"])
-            if problems:
-                failures.append(f"{query}: intent — {'; '.join(problems)}")
-            else:
-                results["intent_ok"] += 1
+    if case.get("intent"):
+        results["intent_checked"] += 1
+        problems = check_intent(payload.get("intent") or {}, case["intent"])
+        if problems:
+            failures.append(f"{query}: intent — {'; '.join(problems)}")
+        else:
+            results["intent_ok"] += 1
 
-        # A case that asserts emptiness is scored on emptiness, not on hits.
-        if case.get("expect_empty"):
-            results["scored"] += 1
-            if items:
-                failures.append(
-                    f"{query}: expected no results, got {len(items)} "
-                    f"(top: {items[0].get('name', '')[:40]})"
-                )
-            else:
-                results["top1"] += 1
-                results["top5"] += 1
-            return
-
-        if case.get("min_distinct_dishes"):
-            found = distinct_dishes(items)
-            results["scored"] += 1
-            if found >= case["min_distinct_dishes"]:
-                results["top1"] += 1
-                results["top5"] += 1
-            else:
-                failures.append(
-                    f"{query}: only {found} distinct dishes in top {top_k}, "
-                    f"wanted {case['min_distinct_dishes']}"
-                )
-            return
-
-        needles = case.get("expect_top1") or case.get("expect_any")
-        if not needles:
-            return
+    # A case that asserts emptiness is scored on emptiness, not on hits.
+    if case.get("expect_empty"):
         results["scored"] += 1
-        if items and matches(items[0], needles):
+        if items:
+            failures.append(
+                f"{query}: expected no results, got {len(items)} "
+                f"(top: {items[0].get('name', '')[:40]})"
+            )
+        else:
             results["top1"] += 1
             results["top5"] += 1
-        elif any(matches(item, needles) for item in items):
+        return
+
+    if case.get("min_distinct_dishes"):
+        found = distinct_dishes(items)
+        results["scored"] += 1
+        if found >= case["min_distinct_dishes"]:
+            results["top1"] += 1
             results["top5"] += 1
-            if case.get("expect_top1"):
-                failures.append(
-                    f"{query}: expected {needles} at rank 1, got "
-                    f"{items[0].get('name', '')[:40]}"
-                )
         else:
             failures.append(
-                f"{query}: no match for {needles} in top {top_k}"
-                + (f" (top: {items[0].get('name', '')[:40]})" if items else "")
+                f"{query}: only {found} distinct dishes in top {top_k}, "
+                f"wanted {case['min_distinct_dishes']}"
             )
+        return
+
+    needles = case.get("expect_top1") or case.get("expect_any")
+    if not needles:
+        return
+    results["scored"] += 1
+    if items and matches(items[0], needles):
+        results["top1"] += 1
+        results["top5"] += 1
+    elif any(matches(item, needles) for item in items):
+        results["top5"] += 1
+        if case.get("expect_top1"):
+            failures.append(
+                f"{query}: expected {needles} at rank 1, got "
+                f"{items[0].get('name', '')[:40]}"
+            )
+    else:
+        failures.append(
+            f"{query}: no match for {needles} in top {top_k}"
+            + (f" (top: {items[0].get('name', '')[:40]})" if items else "")
+        )
 
 
 def _finish(results, latencies, failures, groups, confidences, cases):
