@@ -7,7 +7,7 @@ bên ngoài. Kể cả việc sinh dữ liệu train cũng do một LLM open-wei
 | # | Notebook | GPU | Đầu ra |
 | --- | --- | --- | --- |
 | 1 | Chọn embedding và encode sẵn | T4 ×1 | `emb_<model>.npz` và bảng benchmark |
-| 2 | Sinh dữ liệu bằng LLM open-weight | T4 ×2 | `pairs.jsonl`, `parser.jsonl`, `absa.jsonl` |
+| 2 | Sinh dữ liệu bằng LLM open-weight (Gemma 4 E4B) | T4 ×1 | `pairs.jsonl`, `parser.jsonl`, `absa.jsonl` |
 | 3 | Fine-tune embedding | T4 ×1 | model trên HF Hub và `.npz` mới |
 | 4 | Fine-tune reranker | T4 ×1 | cross-encoder trên HF Hub |
 | 5 | Parser cục bộ thay Gemini | T4 ×1 | classifier đa nhãn |
@@ -130,27 +130,53 @@ Cách chọn: lấy model có nDCG@10 cao nhất mà vẫn **dưới ~150 ms/que
 
 ## 2. Sinh dữ liệu bằng LLM open-weight (thay cho Gemini)
 
-Dùng `Qwen/Qwen3-8B-AWQ` (Apache 2.0, khoảng 6 GB). Model này vừa một GPU T4 và đọc hiểu tiếng Việt tốt.
-T4 **không hỗ trợ bf16**, nên luôn đặt `dtype="half"`. Nên chạy notebook này riêng, vì `vllm` cài kèm torch của nó.
+Dùng **Gemma 4 E4B** (Google DeepMind, Apache 2.0), bản lượng tử hoá QAT q4_0 do Google phát hành
+(`google/gemma-4-E4B-it-qat-q4_0-gguf`, 5,15 GB). Model này xử lý tiếng Việt tốt hơn Qwen3/3.5 qua thử nghiệm thực tế.
+Bản gốc BF16 nặng 16 GB, không vừa một T4 và T4 cũng không hỗ trợ bf16. Bản QAT 4-bit được huấn luyện để giữ chất
+lượng gần với bản gốc, vừa một T4 và chạy bằng `llama.cpp`.
+
+`llama-server` chạy nhiều request song song (`-np`) với continuous batching, nên vẫn đủ nhanh cho hàng chục nghìn
+prompt. Output bị ép theo JSON schema giống như trước.
 
 ```python
-!pip install -q vllm
-from vllm import LLM, SamplingParams
-from vllm.sampling_params import GuidedDecodingParams
+# Build llama.cpp với CUDA cho T4 (compute capability 7.5): khoảng 10 phút, mỗi session một lần.
+!git clone -q --depth 1 https://github.com/ggml-org/llama.cpp /kaggle/working/llama.cpp
+!cmake -S /kaggle/working/llama.cpp -B /kaggle/working/llama.cpp/build        -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=75 -DLLAMA_CURL=OFF > /dev/null
+!cmake --build /kaggle/working/llama.cpp/build --target llama-server -j 4 > /dev/null
 
-llm = LLM(model="Qwen/Qwen3-8B-AWQ", quantization="awq", dtype="half",
-          max_model_len=4096, gpu_memory_utilization=0.90)
+import json, subprocess, time, requests
+from concurrent.futures import ThreadPoolExecutor
+from huggingface_hub import hf_hub_download
+
+gguf = hf_hub_download("google/gemma-4-E4B-it-qat-q4_0-gguf", "gemma-4-E4B_q4_0-it.gguf")
+SLOTS = 16                       # số request chạy song song; tràn VRAM thì giảm xuống 8
+server = subprocess.Popen(
+    ["/kaggle/working/llama.cpp/build/bin/llama-server", "-m", gguf, "-ngl", "99",
+     "-c", str(2048 * SLOTS), "-np", str(SLOTS),       # mỗi slot 2048 token ngữ cảnh
+     "--reasoning-budget", "0", "--port", "8080"],      # tắt chế độ suy nghĩ: chỉ cần nhãn
+    stdout=subprocess.DEVNULL, stderr=open("/kaggle/working/llama.log", "w"))
+for _ in range(120):                                     # chờ model nạp lên GPU
+    try:
+        if requests.get("http://127.0.0.1:8080/health", timeout=2).ok:
+            break
+    except requests.ConnectionError:
+        pass
+    time.sleep(5)
+
+def _one(messages, schema, temperature, max_tokens):
+    r = requests.post("http://127.0.0.1:8080/v1/chat/completions", timeout=600, json={
+        "messages": messages, "temperature": temperature, "max_tokens": max_tokens,
+        "response_format": {"type": "json_schema", "json_schema": {"name": "out", "schema": schema}}})
+    return json.loads(r.json()["choices"][0]["message"]["content"])
 
 def ask(prompts, schema, temperature=0.7, max_tokens=512):
     """Mỗi phần tử của prompts là [{"role": ..., "content": ...}]. Output bị ép theo JSON schema."""
-    params = SamplingParams(temperature=temperature, max_tokens=max_tokens,
-                            guided_decoding=GuidedDecodingParams(json=schema))
-    outs = llm.chat(prompts, params, chat_template_kwargs={"enable_thinking": False})
-    return [json.loads(o.outputs[0].text) for o in outs]
+    with ThreadPoolExecutor(SLOTS) as pool:
+        return list(pool.map(lambda m: _one(m, schema, temperature, max_tokens), prompts))
 ```
 
-> Nếu bản `vllm` mới nhất không chạy được trên T4 (compute capability 7.5), hãy pin một bản cũ hơn
-> hoặc chuyển sang `transformers` với `model.generate` chạy theo batch. Cách này chậm hơn nhưng không phụ thuộc vào kernel của vllm.
+> Server không lên thì xem `/kaggle/working/llama.log`. Hai lỗi hay gặp: tràn VRAM (giảm `SLOTS`) và bản llama.cpp
+> quá cũ chưa hỗ trợ Gemma 4 (clone lại bản mới). `ask()` giữ nguyên giao diện, nên các bước 2a, 2b, 2c, 7b không đổi.
 
 ### 2a. Cặp (câu truy vấn, quán) cho embedding và reranker
 
@@ -420,9 +446,11 @@ Mở file, đổi `"label": null` thành `"POS"`, `"NEG"`, `"MIX"` hoặc `"NEU"
 upload file này thành một **Kaggle Dataset private** tên `vietnomnom-gold`. File đã được đưa vào `.gitignore` vì chứa nguyên văn review Foody.
 Đây là đề thi: notebook sẽ loại các review này khỏi tập train.
 
-### 7b. Nhãn silver bằng LLM (chạy trong môi trường vLLM của notebook 2)
+### 7b. Nhãn silver bằng LLM (chạy trong môi trường llama.cpp của notebook 2)
 
-Không tự chấm tay 26k review được, nên để Qwen3 gán nhãn, rồi dùng điểm của người viết để loại các nhãn vô lý.
+Không tự chấm tay 26k review được, nên để Gemma gán nhãn, rồi dùng điểm của người viết để loại các nhãn vô lý.
+**Đo trước trên bộ gold:** chạy `ask` cho 400 review đã chấm tay và tính tỉ lệ khớp. Khớp từ khoảng 80% trở lên mới
+đáng chạy cả 26k; thấp hơn thì sửa prompt trước, vì nhãn silver sai bao nhiêu thì model học sai bấy nhiêu.
 
 ```python
 import json, os
@@ -441,6 +469,12 @@ SENT_SCHEMA = {"type": "object", "properties": {"label": {"type": "string", "enu
 SENT_PROMPT = ("Phân loại cảm xúc của review quán ăn. POS: khen là chính. NEG: chê là chính. "
                "MIX: vừa khen vừa chê rõ ràng, ví dụ 'ngon nhưng giá chát'. NEU: chỉ kể lại, hỏi, không bày tỏ ý kiến. "
                "Review trích lời chê của người khác để phản bác thì vẫn tính theo ý của người viết.")
+# Đo trước trên 400 review chấm tay: khớp dưới ~80% thì sửa prompt, đừng chạy cả 26k.
+gold_rows = [r for r in json.load(open("/kaggle/input/vietnomnom-gold/sentiment_to_grade.json"))["reviews"] if r["label"]]
+pred = ask([[{"role": "system", "content": SENT_PROMPT}, {"role": "user", "content": r["text"][:2000]}] for r in gold_rows],
+           SENT_SCHEMA, temperature=0.0, max_tokens=16)
+print("khớp nhãn tay:", round(sum(p["label"] == r["label"] for p, r in zip(pred, gold_rows)) / len(gold_rows), 3))
+
 out = ask([[{"role": "system", "content": SENT_PROMPT}, {"role": "user", "content": r["text"][:2000]}] for r in rows],
           SENT_SCHEMA, temperature=0.0, max_tokens=16)
 for r, y in zip(rows, out):
@@ -456,7 +490,7 @@ print(len(rows), "->", len(keep))
 
 Khoảng 26k review × 300 token, mất 1–2 giờ trên T4. Lưu `sentiment_silver.jsonl` thành Kaggle Dataset để dùng ở bước sau.
 
-### 7c. Fine-tune (notebook riêng, không cần vLLM)
+### 7c. Fine-tune (notebook riêng, không cần llama.cpp)
 
 Khởi đầu từ chính model sentiment đang dùng, vì nó đã biết khen/chê, rồi thay đầu ra 3 nhãn bằng 4 nhãn.
 
@@ -556,7 +590,7 @@ cho `sentiment.py` hiểu nhãn `MIX`, hiển thị "Trái chiều" ở trang qu
 
 - **License:** ViSoBERT (cả model sentiment đang dùng) chỉ được phép dùng cho nghiên cứu. Với đồ án thì không sao, nhưng nếu
   thương mại hoá thì nên đổi sang base có license mở, như `FacebookAI/xlm-roberta-base` (MIT) hoặc model Apache 2.0.
-  Qwen3 dùng Apache 2.0.
+  Gemma 4 dùng Apache 2.0.
 - **Dữ liệu crawl từ Foody:** chỉ đẩy model lên Hub ở chế độ private, không public dataset `pairs.jsonl` hay review.
 - **Không đo trên dữ liệu đã dùng để train:** `search_eval.json` và `search_qrels.json` là đề thi. Bước 2a đã lọc trùng; khi thêm case mới
   vào bộ đo, đừng chép câu từ `pairs.jsonl` sang.
