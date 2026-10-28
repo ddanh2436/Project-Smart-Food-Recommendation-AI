@@ -51,7 +51,13 @@ FIELD_RENAMES = {
     # them here is what keeps the chatbot's ordering identical to the website's.
     "reviewCount": "review_count",
     "diemTrungBinhAdj": "rating_adjusted",
+    "diemKhongGianAdj": "score_space_adjusted",
+    "diemViTriAdj": "score_location_adjusted",
+    "diemChatLuongAdj": "score_quality_adjusted",
+    "diemPhucVuAdj": "score_service_adjusted",
+    "diemGiaCaAdj": "score_price_adjusted",
 }
+SUB_SCORES = ["score_space", "score_location", "score_quality", "score_service", "score_price"]
 
 # Aspects precomputed by aspect_index.py. Kept as flat columns rather than a
 # nested dict so the ranker can read them as numpy arrays.
@@ -82,6 +88,7 @@ REQUIRED_COLUMNS: dict[str, Any] = {
     "score_price": 0.0,
     "review_count": 0.0,
     "rating_adjusted": 0.0,
+    **{f"{name}_adjusted": 0.0 for name in SUB_SCORES},
     **{name: 0.0 for name in ASPECT_RATIO_COLUMNS},
     **{name: 0.0 for name in ASPECT_COUNT_COLUMNS},
 }
@@ -91,6 +98,7 @@ NUMERIC_COLUMNS = [
     "score_space", "score_location", "score_quality",
     "score_service", "score_price",
     "review_count", "rating_adjusted",
+    *[f"{name}_adjusted" for name in SUB_SCORES],
     *ASPECT_RATIO_COLUMNS, *ASPECT_COUNT_COLUMNS,
 ]
 # --------------------------------------------------------------------------
@@ -310,7 +318,17 @@ class RestaurantStore:
                 "pass (POST /restaurants/admin/rating-stats). Ranking falls "
                 "back to the raw rating until then."
             )
-            frame["rating_adjusted"] = frame["rating"]
+        # Per row too: a document the rating pass skipped has no adjusted score.
+        frame["rating_adjusted"] = frame["rating_adjusted"].where(
+            frame["rating_adjusted"] > 0, frame["rating"]
+        )
+        # Sub-scores are only ever shown, never ranked on, so they simply become
+        # the adjusted values -- the same rule as the website's withAdjusted().
+        # Text saying "món ăn 7.0" beside a card showing 7.6 read as two numbers
+        # for one thing.
+        for name in SUB_SCORES:
+            adjusted = frame[f"{name}_adjusted"]
+            frame[name] = adjusted.where(adjusted > 0, frame[name]).round(1)
 
         # Unpack the precomputed aspect verdicts. A restaurant without them
         # simply scores zero on every aspect, which the ranker reads as "no
