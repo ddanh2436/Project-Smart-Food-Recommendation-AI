@@ -394,7 +394,7 @@ def _merge_intents(previous: Intent, current: Intent) -> Intent:
 def _describe_top(row: dict, lang: str) -> str:
     """One grounded sentence about the best hit, using only real fields."""
     name = row.get("name") or ""
-    rating = row.get("rating") or 0
+    rating = row.get("rating_adjusted") or row.get("rating") or 0
     distance = row.get("distance_km")
     price = row.get("price_text") or ""
     district = row.get("district") or ""
@@ -475,6 +475,20 @@ def _success_reply(result: SearchResult, payloads: list[dict], lang: str) -> str
         prefix = "Lưu ý: " if lang == "vi" else "Note: "
         parts.append(prefix + "; ".join(notes[:2]) + ".")
 
+    # A handful of results under several conditions: name the conditions, so
+    # "1 quán" where the district has four hot-pot places does not read as
+    # missing data.
+    if total <= 3:
+        filters = _filters_applied(intent, lang)
+        if filters:
+            parts.append(
+                "Chỉ còn ít quán vì mình đã lọc theo: " + ", ".join(filters)
+                + ". Bỏ bớt điều kiện để xem thêm nhé."
+                if lang == "vi" else
+                "Only a few are left because I filtered by: " + ", ".join(filters)
+                + ". Drop a condition to see more."
+            )
+
     if intent.exclude:
         excluded = ", ".join(intent.exclude)
         parts.append(
@@ -496,6 +510,27 @@ def _success_reply(result: SearchResult, payloads: list[dict], lang: str) -> str
 
 # A party this size or larger is told to book ahead.
 GROUP_SIZE = 4
+
+
+def _filters_applied(intent, lang: str) -> list[str]:
+    """The hard conditions search applied, in words."""
+    vi = lang == "vi"
+    out = []
+    if intent.open_now:
+        out.append("đang mở cửa" if vi else "open now")
+    for tag in intent.time_tags:
+        out.append(f"mở cửa buổi {tag}" if vi else f"open in the {tag}")
+    if intent.price_max:
+        out.append(f"giá ≤ {int(intent.price_max):,}đ".replace(",", ".") if vi
+                   else f"price ≤ {int(intent.price_max):,}đ")
+    if intent.price_min:
+        out.append(f"giá ≥ {int(intent.price_min):,}đ".replace(",", ".") if vi
+                   else f"price ≥ {int(intent.price_min):,}đ")
+    if intent.min_rating:
+        out.append(f"điểm ≥ {intent.min_rating:g}" if vi else f"score ≥ {intent.min_rating:g}")
+    if intent.party_size and intent.party_size >= 2:
+        out.append("bỏ quán suất 1 người" if vi else "no single-portion places")
+    return out
 
 
 def _search_around(

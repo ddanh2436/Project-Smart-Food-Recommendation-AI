@@ -735,7 +735,7 @@ def search(
 
     if intent.min_rating:
         working = _apply_filter(
-            working, working["rating"] >= intent.min_rating, "min_rating", relaxed
+            working, working["rating_adjusted"] >= intent.min_rating, "min_rating", relaxed
         )
 
     if intent.open_now:
@@ -850,7 +850,8 @@ def explain(row: Any, intent: Intent | None) -> list[dict]:
                 {"kind": "price", "value": str(row.get("price_text", "") or "")}
             )
 
-    rating = float(row.get("rating", 0.0) or 0.0)
+    # The score the card beside this reason shows.
+    rating = float(row.get("rating_adjusted", 0.0) or row.get("rating", 0.0) or 0.0)
     count = int(row.get("review_count", 0) or 0)
     if rating > 0 and count > 0:
         reasons.append({"kind": "rating", "value": round(rating, 1), "count": count})

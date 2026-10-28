@@ -99,6 +99,12 @@ def check_time_and_party() -> None:
     assert re.search(search.SOLO_FORMAT_RE, "lục bồ đề - lẩu chay 1 người")
     assert not re.search(search.SOLO_FORMAT_RE, "lẩu 11 người")
 
+    # A thin result names the filters that thinned it.
+    from chat import _filters_applied
+    said = _filters_applied(intent, "vi")
+    assert "mở cửa buổi tối" in said and "giá ≤ 150.000đ" in said, said
+    assert "bỏ quán suất 1 người" in said
+
 
 def check_aspect_cutoff() -> None:
     from datetime import datetime, timezone

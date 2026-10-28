@@ -218,7 +218,7 @@ def _aspect_line(row: dict, topic: str, lang: str) -> str:
     mentions = int(float(row.get(f"aspect_{topic}_n", 0) or 0))
     ratio = float(row.get(f"aspect_{topic}", 0.0) or 0.0)
     score = float(row.get(SCORE_COLUMNS.get(topic, ""), 0.0) or 0.0) if topic in SCORE_COLUMNS else 0.0
-    overall = float(row.get("rating", 0.0) or 0.0)
+    overall = float(row.get("rating_adjusted", 0.0) or row.get("rating", 0.0) or 0.0)
     # The card under this answer shows the overall score. Printing the food
     # score alone beside it read as two values for one number: "7.0/10" in the
     # text, 7.2 on the card. So the overall is named whenever it differs.
