@@ -7,11 +7,12 @@ bên ngoài. Kể cả việc sinh dữ liệu train cũng do một LLM open-wei
 | # | Notebook | GPU | Đầu ra |
 | --- | --- | --- | --- |
 | 1 | Chọn embedding và encode sẵn | T4 ×1 | `emb_<model>.npz` và bảng benchmark |
-| 2 | Sinh dữ liệu bằng LLM open-weight | T4 ×2 | `pairs.jsonl`, `parser.jsonl`, `absa.jsonl` |
+| 2 | Sinh dữ liệu bằng LLM open-weight (Gemma 4 E4B) | T4 ×1 | `pairs.jsonl`, `parser.jsonl`, `absa.jsonl` |
 | 3 | Fine-tune embedding | T4 ×1 | model trên HF Hub và `.npz` mới |
 | 4 | Fine-tune reranker | T4 ×1 | cross-encoder trên HF Hub |
 | 5 | Parser cục bộ thay Gemini | T4 ×1 | classifier đa nhãn |
 | 6 | ABSA (sentiment theo khía cạnh) | T4 ×1 | classifier 6 khía cạnh × 4 nhãn |
+| 7 | Sentiment 4 nhãn cho từng review | T4 ×1 | classifier POS / NEG / MIX / NEU |
 
 **Quy tắc chung:** mỗi model mới chỉ được giữ lại khi `benchmark.py --against baseline.json`
 cho thấy nó tốt hơn (nDCG@10, MRR@10, nhóm `distance` và `hard`) và độ trễ trên CPU vẫn nằm trong ngân sách.
@@ -31,7 +32,7 @@ secrets = UserSecretsClient()
 os.environ["MONGO_URI"] = secrets.get_secret("MONGO_URI")
 os.environ["HF_TOKEN"] = secrets.get_secret("HF_TOKEN")      # bỏ nếu không đẩy lên Hub
 
-!git clone -q -b fix/ranking-radius-qrels https://github.com/ddanh2436/Project-Smart-Food-Recommendation-AI.git /kaggle/working/ai
+!git clone -q https://github.com/ddanh2436/Project-Smart-Food-Recommendation-AI.git /kaggle/working/ai
 # Dùng đúng phiên bản như requirements.txt. KHÔNG cài lại torch: Kaggle đã có sẵn bản GPU.
 !pip install -q "transformers~=4.57.1" "sentence-transformers~=5.7.0" "pymongo~=4.15.0" \
     "fastapi~=0.121.0" "uvicorn[standard]~=0.38.0" "python-multipart~=0.0.20" requests
@@ -129,27 +130,53 @@ Cách chọn: lấy model có nDCG@10 cao nhất mà vẫn **dưới ~150 ms/que
 
 ## 2. Sinh dữ liệu bằng LLM open-weight (thay cho Gemini)
 
-Dùng `Qwen/Qwen3-8B-AWQ` (Apache 2.0, khoảng 6 GB). Model này vừa một GPU T4 và đọc hiểu tiếng Việt tốt.
-T4 **không hỗ trợ bf16**, nên luôn đặt `dtype="half"`. Nên chạy notebook này riêng, vì `vllm` cài kèm torch của nó.
+Dùng **Gemma 4 E4B** (Google DeepMind, Apache 2.0), bản lượng tử hoá QAT q4_0 do Google phát hành
+(`google/gemma-4-E4B-it-qat-q4_0-gguf`, 5,15 GB). Model này xử lý tiếng Việt tốt hơn Qwen3/3.5 qua thử nghiệm thực tế.
+Bản gốc BF16 nặng 16 GB, không vừa một T4 và T4 cũng không hỗ trợ bf16. Bản QAT 4-bit được huấn luyện để giữ chất
+lượng gần với bản gốc, vừa một T4 và chạy bằng `llama.cpp`.
+
+`llama-server` chạy nhiều request song song (`-np`) với continuous batching, nên vẫn đủ nhanh cho hàng chục nghìn
+prompt. Output bị ép theo JSON schema giống như trước.
 
 ```python
-!pip install -q vllm
-from vllm import LLM, SamplingParams
-from vllm.sampling_params import GuidedDecodingParams
+# Build llama.cpp với CUDA cho T4 (compute capability 7.5): khoảng 10 phút, mỗi session một lần.
+!git clone -q --depth 1 https://github.com/ggml-org/llama.cpp /kaggle/working/llama.cpp
+!cmake -S /kaggle/working/llama.cpp -B /kaggle/working/llama.cpp/build        -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=75 -DLLAMA_CURL=OFF > /dev/null
+!cmake --build /kaggle/working/llama.cpp/build --target llama-server -j 4 > /dev/null
 
-llm = LLM(model="Qwen/Qwen3-8B-AWQ", quantization="awq", dtype="half",
-          max_model_len=4096, gpu_memory_utilization=0.90)
+import json, subprocess, time, requests
+from concurrent.futures import ThreadPoolExecutor
+from huggingface_hub import hf_hub_download
+
+gguf = hf_hub_download("google/gemma-4-E4B-it-qat-q4_0-gguf", "gemma-4-E4B_q4_0-it.gguf")
+SLOTS = 16                       # số request chạy song song; tràn VRAM thì giảm xuống 8
+server = subprocess.Popen(
+    ["/kaggle/working/llama.cpp/build/bin/llama-server", "-m", gguf, "-ngl", "99",
+     "-c", str(2048 * SLOTS), "-np", str(SLOTS),       # mỗi slot 2048 token ngữ cảnh
+     "--reasoning-budget", "0", "--port", "8080"],      # tắt chế độ suy nghĩ: chỉ cần nhãn
+    stdout=subprocess.DEVNULL, stderr=open("/kaggle/working/llama.log", "w"))
+for _ in range(120):                                     # chờ model nạp lên GPU
+    try:
+        if requests.get("http://127.0.0.1:8080/health", timeout=2).ok:
+            break
+    except requests.ConnectionError:
+        pass
+    time.sleep(5)
+
+def _one(messages, schema, temperature, max_tokens):
+    r = requests.post("http://127.0.0.1:8080/v1/chat/completions", timeout=600, json={
+        "messages": messages, "temperature": temperature, "max_tokens": max_tokens,
+        "response_format": {"type": "json_schema", "json_schema": {"name": "out", "schema": schema}}})
+    return json.loads(r.json()["choices"][0]["message"]["content"])
 
 def ask(prompts, schema, temperature=0.7, max_tokens=512):
     """Mỗi phần tử của prompts là [{"role": ..., "content": ...}]. Output bị ép theo JSON schema."""
-    params = SamplingParams(temperature=temperature, max_tokens=max_tokens,
-                            guided_decoding=GuidedDecodingParams(json=schema))
-    outs = llm.chat(prompts, params, chat_template_kwargs={"enable_thinking": False})
-    return [json.loads(o.outputs[0].text) for o in outs]
+    with ThreadPoolExecutor(SLOTS) as pool:
+        return list(pool.map(lambda m: _one(m, schema, temperature, max_tokens), prompts))
 ```
 
-> Nếu bản `vllm` mới nhất không chạy được trên T4 (compute capability 7.5), hãy pin một bản cũ hơn
-> hoặc chuyển sang `transformers` với `model.generate` chạy theo batch. Cách này chậm hơn nhưng không phụ thuộc vào kernel của vllm.
+> Server không lên thì xem `/kaggle/working/llama.log`. Hai lỗi hay gặp: tràn VRAM (giảm `SLOTS`) và bản llama.cpp
+> quá cũ chưa hỗ trợ Gemma 4 (clone lại bản mới). `ask()` giữ nguyên giao diện, nên các bước 2a, 2b, 2c, 7b không đổi.
 
 ### 2a. Cặp (câu truy vấn, quán) cho embedding và reranker
 
@@ -396,11 +423,174 @@ cross-entropy của 6 đầu. Đánh giá trên khoảng 300 review đã kiểm 
 
 ---
 
+## 7. Sentiment 4 nhãn cho từng review
+
+**Vì sao cần:** so nhãn của model hiện tại (`5CD-AI/Vietnamese-Sentiment-visobert`) với điểm chính người viết chấm, trên 26.529 review:
+
+| Điểm người viết chấm | POS | NEU | NEG |
+| --- | --- | --- | --- |
+| ≥ 8 | 96% | 3% | 1% |
+| 5–7 | 67% | 12% | 21% |
+| ≤ 4 | 6% | 2% | 92% |
+
+Model đúng ở hai đầu nhưng sai ở khoảng giữa, vì nó **không có nhãn "trái chiều"**: "ngon nhưng giá chát" bị ép thành POS hoặc NEG.
+Model mới có 4 nhãn: `POS` (khen là chính), `NEG` (chê là chính), `MIX` (vừa khen vừa chê), `NEU` (kể lại, hỏi, không bày tỏ ý kiến).
+
+### 7a. Bộ test thật (chấm tay, làm trên máy)
+
+```bash
+python sentiment_sheet.py      # tạo sentiment_to_grade.json: 400 review, nặng về nhóm điểm 5-7
+```
+
+Mở file, đổi `"label": null` thành `"POS"`, `"NEG"`, `"MIX"` hoặc `"NEU"`. **Chấm theo nội dung, không theo điểm.** Chấm xong,
+upload file này thành một **Kaggle Dataset private** tên `vietnomnom-gold`. File đã được đưa vào `.gitignore` vì chứa nguyên văn review Foody.
+Đây là đề thi: notebook sẽ loại các review này khỏi tập train.
+
+### 7b. Nhãn silver bằng LLM (chạy trong môi trường llama.cpp của notebook 2)
+
+Không tự chấm tay 26k review được, nên để Gemma gán nhãn, rồi dùng điểm của người viết để loại các nhãn vô lý.
+**Đo trước trên bộ gold:** chạy `ask` cho 400 review đã chấm tay và tính tỉ lệ khớp. Khớp từ khoảng 80% trở lên mới
+đáng chạy cả 26k; thấp hơn thì sửa prompt trước, vì nhãn silver sai bao nhiêu thì model học sai bấy nhiêu.
+
+```python
+import json, os
+from pymongo import MongoClient
+db = MongoClient(os.environ["MONGO_URI"])["VietNomNom"]
+gold = {r["text"] for r in json.load(open("/kaggle/input/vietnomnom-gold/sentiment_to_grade.json"))["reviews"]}
+rows = []
+for r in db["reviews"].find({}, {"noiDung": 1, "diemReview": 1, "urlGoc": 1}):
+    text = " ".join((r.get("noiDung") or "").split())
+    if len(text) >= 20 and text not in gold:            # đề thi không được lọt vào tập train
+        # Thiếu điểm thì coi như 5: không đủ căn cứ để loại nhãn nào.
+        rows.append({"text": text, "score": float(r.get("diemReview") or 5), "place": r.get("urlGoc")})
+
+SENT_SCHEMA = {"type": "object", "properties": {"label": {"type": "string", "enum": ["POS", "NEG", "MIX", "NEU"]}},
+               "required": ["label"]}
+SENT_PROMPT = ("Phân loại cảm xúc của review quán ăn. POS: khen là chính. NEG: chê là chính. "
+               "MIX: vừa khen vừa chê rõ ràng, ví dụ 'ngon nhưng giá chát'. NEU: chỉ kể lại, hỏi, không bày tỏ ý kiến. "
+               "Review trích lời chê của người khác để phản bác thì vẫn tính theo ý của người viết.")
+# Đo trước trên 400 review chấm tay: khớp dưới ~80% thì sửa prompt, đừng chạy cả 26k.
+gold_rows = [r for r in json.load(open("/kaggle/input/vietnomnom-gold/sentiment_to_grade.json"))["reviews"] if r["label"]]
+pred = ask([[{"role": "system", "content": SENT_PROMPT}, {"role": "user", "content": r["text"][:2000]}] for r in gold_rows],
+           SENT_SCHEMA, temperature=0.0, max_tokens=16)
+print("khớp nhãn tay:", round(sum(p["label"] == r["label"] for p, r in zip(pred, gold_rows)) / len(gold_rows), 3))
+
+out = ask([[{"role": "system", "content": SENT_PROMPT}, {"role": "user", "content": r["text"][:2000]}] for r in rows],
+          SENT_SCHEMA, temperature=0.0, max_tokens=16)
+for r, y in zip(rows, out):
+    r["label"] = y["label"]
+
+# LLM nói POS mà người viết chấm <= 4, hoặc nói NEG mà chấm >= 8.5: một trong hai sai, bỏ cho chắc.
+keep = [r for r in rows if not (r["label"] == "POS" and r["score"] <= 4 or r["label"] == "NEG" and r["score"] >= 8.5)]
+with open("/kaggle/working/sentiment_silver.jsonl", "w", encoding="utf-8") as f:
+    for r in keep:
+        f.write(json.dumps(r, ensure_ascii=False) + "\n")
+print(len(rows), "->", len(keep))
+```
+
+Khoảng 26k review × 300 token, mất 1–2 giờ trên T4. Lưu `sentiment_silver.jsonl` thành Kaggle Dataset để dùng ở bước sau.
+
+### 7c. Fine-tune (notebook riêng, không cần llama.cpp)
+
+Khởi đầu từ chính model sentiment đang dùng, vì nó đã biết khen/chê, rồi thay đầu ra 3 nhãn bằng 4 nhãn.
+
+```python
+import json, random, numpy as np, torch
+from collections import Counter
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, Trainer, TrainingArguments
+
+LABELS = ["NEG", "NEU", "POS", "MIX"]               # 3 nhãn đầu giữ thứ tự cũ (LABEL_0/1/2)
+L2I = {l: i for i, l in enumerate(LABELS)}
+BASE = "5CD-AI/Vietnamese-Sentiment-visobert"
+tok = AutoTokenizer.from_pretrained(BASE)
+model = AutoModelForSequenceClassification.from_pretrained(
+    BASE, num_labels=4, id2label=dict(enumerate(LABELS)), label2id=L2I, ignore_mismatched_sizes=True)
+
+rows = [json.loads(l) for l in open("/kaggle/input/vietnomnom-silver/sentiment_silver.jsonl", encoding="utf-8")]
+# Tách theo QUÁN: review của cùng một quán hay giống nhau, tách theo câu thì điểm val bị thổi phồng.
+places = sorted({r["place"] for r in rows}); random.Random(0).shuffle(places)
+val_places = set(places[: len(places) // 10])
+
+def encode(r):
+    # Review dài: giữ 128 token đầu và 126 token cuối, vì kết luận ("nói chung là...") thường nằm ở cuối.
+    ids = tok(r["text"], add_special_tokens=False)["input_ids"]
+    if len(ids) > 254:
+        ids = ids[:128] + ids[-126:]
+    ids = [tok.cls_token_id] + ids + [tok.sep_token_id]
+    return {"input_ids": ids, "attention_mask": [1] * len(ids), "labels": L2I[r["label"]]}
+
+train = [encode(r) for r in rows if r["place"] not in val_places]
+val = [encode(r) for r in rows if r["place"] in val_places]
+counts = Counter(x["labels"] for x in train)
+weights = torch.tensor([len(train) / (4 * counts[i]) for i in range(4)], dtype=torch.float)
+print(counts)  # MIX và NEU sẽ ít hơn POS nhiều: trọng số loss bù lại
+
+class WeightedTrainer(Trainer):
+    def compute_loss(self, model, inputs, return_outputs=False, **kw):
+        labels = inputs.pop("labels")
+        out = model(**inputs)
+        loss = torch.nn.functional.cross_entropy(out.logits, labels, weight=weights.to(out.logits.device))
+        return (loss, out) if return_outputs else loss
+
+def collate(batch):
+    n = max(len(x["input_ids"]) for x in batch)
+    pad = lambda k, v: [x[k] + [v] * (n - len(x[k])) for x in batch]
+    return {"input_ids": torch.tensor(pad("input_ids", tok.pad_token_id)),
+            "attention_mask": torch.tensor(pad("attention_mask", 0)),
+            "labels": torch.tensor([x["labels"] for x in batch])}
+
+args = TrainingArguments("/kaggle/working/sent4", per_device_train_batch_size=32, per_device_eval_batch_size=64,
+                         learning_rate=2e-5, num_train_epochs=3, warmup_ratio=0.1, weight_decay=0.01,
+                         fp16=True, eval_strategy="epoch", save_strategy="epoch", load_best_model_at_end=True,
+                         metric_for_best_model="eval_loss", save_total_limit=1, report_to=[])
+WeightedTrainer(model=model, args=args, train_dataset=train, eval_dataset=val, data_collator=collate).train()
+```
+
+### 7d. Đo trên bộ test thật
+
+```python
+from sklearn.metrics import classification_report, confusion_matrix, f1_score
+gold_rows = [r for r in json.load(open("/kaggle/input/vietnomnom-gold/sentiment_to_grade.json"))["reviews"] if r["label"]]
+
+def predict(m, texts):
+    m.eval(); preds = []
+    for i in range(0, len(texts), 64):
+        b = collate([encode({"text": t, "label": "POS"}) for t in texts[i:i + 64]])
+        with torch.no_grad():
+            logits = m(input_ids=b["input_ids"].to(m.device), attention_mask=b["attention_mask"].to(m.device)).logits
+        preds += [m.config.id2label[j] for j in logits.argmax(-1).tolist()]
+    return preds
+
+y = [r["label"] for r in gold_rows]
+new = predict(model, [r["text"] for r in gold_rows])
+old_model = AutoModelForSequenceClassification.from_pretrained(BASE).to(model.device)
+old = [{"LABEL_0": "NEG", "LABEL_1": "NEU", "LABEL_2": "POS"}.get(p, p) for p in predict(old_model, [r["text"] for r in gold_rows])]
+for name, p in [("cũ (3 nhãn)", old), ("mới (4 nhãn)", new)]:
+    print(name, "macro-F1:", round(f1_score(y, p, average="macro", labels=LABELS), 3))
+print(classification_report(y, new, labels=LABELS, digits=3))
+print(confusion_matrix(y, new, labels=LABELS))
+```
+
+**Chỉ giữ model mới khi** macro-F1 cao hơn model cũ và F1 của `MIX` từ khoảng 0.6 trở lên. Nếu `MIX` thấp, xem ma trận nhầm lẫn:
+MIX hay bị nhầm thành POS thì thêm ví dụ MIX (ví dụ chạy lại 7b với `temperature=0.0` riêng cho nhóm điểm 5–7), chứ đừng hạ ngưỡng.
+
+### 7e. Đẩy lên Hub và báo lại
+
+```python
+model.push_to_hub("sirin2412/vietnomnom-sentiment-4c", private=True)
+tok.push_to_hub("sirin2412/vietnomnom-sentiment-4c", private=True)
+```
+
+Sau đó gửi tên model cùng kết quả 7d. Phần tích hợp gồm: đặt `SENTIMENT_MODEL` và `HF_TOKEN` (để tải model private) trên Space,
+cho `sentiment.py` hiểu nhãn `MIX`, hiển thị "Trái chiều" ở trang quán, chạy lại nhãn cho 26k review và chạy lại aspect index.
+
+---
+
 ## Lưu ý
 
 - **License:** ViSoBERT (cả model sentiment đang dùng) chỉ được phép dùng cho nghiên cứu. Với đồ án thì không sao, nhưng nếu
   thương mại hoá thì nên đổi sang base có license mở, như `FacebookAI/xlm-roberta-base` (MIT) hoặc model Apache 2.0.
-  Qwen3 dùng Apache 2.0.
+  Gemma 4 dùng Apache 2.0.
 - **Dữ liệu crawl từ Foody:** chỉ đẩy model lên Hub ở chế độ private, không public dataset `pairs.jsonl` hay review.
 - **Không đo trên dữ liệu đã dùng để train:** `search_eval.json` và `search_qrels.json` là đề thi. Bước 2a đã lọc trùng; khi thêm case mới
   vào bộ đo, đừng chép câu từ `pairs.jsonl` sang.
