@@ -12,6 +12,7 @@ bên ngoài. Kể cả việc sinh dữ liệu train cũng do một LLM open-wei
 | 4 | Fine-tune reranker | T4 ×1 | cross-encoder trên HF Hub |
 | 5 | Parser cục bộ thay Gemini | T4 ×1 | classifier đa nhãn |
 | 6 | ABSA (sentiment theo khía cạnh) | T4 ×1 | classifier 6 khía cạnh × 4 nhãn |
+| 7 | Sentiment 4 nhãn cho từng review | T4 ×1 | classifier POS / NEG / MIX / NEU |
 
 **Quy tắc chung:** mỗi model mới chỉ được giữ lại khi `benchmark.py --against baseline.json`
 cho thấy nó tốt hơn (nDCG@10, MRR@10, nhóm `distance` và `hard`) và độ trễ trên CPU vẫn nằm trong ngân sách.
@@ -31,7 +32,7 @@ secrets = UserSecretsClient()
 os.environ["MONGO_URI"] = secrets.get_secret("MONGO_URI")
 os.environ["HF_TOKEN"] = secrets.get_secret("HF_TOKEN")      # bỏ nếu không đẩy lên Hub
 
-!git clone -q -b fix/ranking-radius-qrels https://github.com/ddanh2436/Project-Smart-Food-Recommendation-AI.git /kaggle/working/ai
+!git clone -q https://github.com/ddanh2436/Project-Smart-Food-Recommendation-AI.git /kaggle/working/ai
 # Dùng đúng phiên bản như requirements.txt. KHÔNG cài lại torch: Kaggle đã có sẵn bản GPU.
 !pip install -q "transformers~=4.57.1" "sentence-transformers~=5.7.0" "pymongo~=4.15.0" \
     "fastapi~=0.121.0" "uvicorn[standard]~=0.38.0" "python-multipart~=0.0.20" requests
@@ -393,6 +394,161 @@ Phần này thay việc đếm từ khoá trong `aspect_index.py`. Có hai ngu�
 Model có 6 đầu ra, mỗi đầu phân loại 4 nhãn (`none / positive / negative / neutral`) trên nền ViSoBERT, dùng loss là tổng
 cross-entropy của 6 đầu. Đánh giá trên khoảng 300 review đã kiểm tra tay. Khi tích hợp, chỉ cần thay chỗ `aspect_index.build()` gán
 `positive_ratio` và `mentions`. Ranker và trang chi tiết quán đã đọc sẵn hai trường này.
+
+---
+
+## 7. Sentiment 4 nhãn cho từng review
+
+**Vì sao cần:** so nhãn của model hiện tại (`5CD-AI/Vietnamese-Sentiment-visobert`) với điểm chính người viết chấm, trên 26.529 review:
+
+| Điểm người viết chấm | POS | NEU | NEG |
+| --- | --- | --- | --- |
+| ≥ 8 | 96% | 3% | 1% |
+| 5–7 | 67% | 12% | 21% |
+| ≤ 4 | 6% | 2% | 92% |
+
+Model đúng ở hai đầu nhưng sai ở khoảng giữa, vì nó **không có nhãn "trái chiều"**: "ngon nhưng giá chát" bị ép thành POS hoặc NEG.
+Model mới có 4 nhãn: `POS` (khen là chính), `NEG` (chê là chính), `MIX` (vừa khen vừa chê), `NEU` (kể lại, hỏi, không bày tỏ ý kiến).
+
+### 7a. Bộ test thật (chấm tay, làm trên máy)
+
+```bash
+python sentiment_sheet.py      # tạo sentiment_to_grade.json: 400 review, nặng về nhóm điểm 5-7
+```
+
+Mở file, đổi `"label": null` thành `"POS"`, `"NEG"`, `"MIX"` hoặc `"NEU"`. **Chấm theo nội dung, không theo điểm.** Chấm xong,
+upload file này thành một **Kaggle Dataset private** tên `vietnomnom-gold`. File đã được đưa vào `.gitignore` vì chứa nguyên văn review Foody.
+Đây là đề thi: notebook sẽ loại các review này khỏi tập train.
+
+### 7b. Nhãn silver bằng LLM (chạy trong môi trường vLLM của notebook 2)
+
+Không tự chấm tay 26k review được, nên để Qwen3 gán nhãn, rồi dùng điểm của người viết để loại các nhãn vô lý.
+
+```python
+import json, os
+from pymongo import MongoClient
+db = MongoClient(os.environ["MONGO_URI"])["VietNomNom"]
+gold = {r["text"] for r in json.load(open("/kaggle/input/vietnomnom-gold/sentiment_to_grade.json"))["reviews"]}
+rows = []
+for r in db["reviews"].find({}, {"noiDung": 1, "diemReview": 1, "urlGoc": 1}):
+    text = " ".join((r.get("noiDung") or "").split())
+    if len(text) >= 20 and text not in gold:            # đề thi không được lọt vào tập train
+        # Thiếu điểm thì coi như 5: không đủ căn cứ để loại nhãn nào.
+        rows.append({"text": text, "score": float(r.get("diemReview") or 5), "place": r.get("urlGoc")})
+
+SENT_SCHEMA = {"type": "object", "properties": {"label": {"type": "string", "enum": ["POS", "NEG", "MIX", "NEU"]}},
+               "required": ["label"]}
+SENT_PROMPT = ("Phân loại cảm xúc của review quán ăn. POS: khen là chính. NEG: chê là chính. "
+               "MIX: vừa khen vừa chê rõ ràng, ví dụ 'ngon nhưng giá chát'. NEU: chỉ kể lại, hỏi, không bày tỏ ý kiến. "
+               "Review trích lời chê của người khác để phản bác thì vẫn tính theo ý của người viết.")
+out = ask([[{"role": "system", "content": SENT_PROMPT}, {"role": "user", "content": r["text"][:2000]}] for r in rows],
+          SENT_SCHEMA, temperature=0.0, max_tokens=16)
+for r, y in zip(rows, out):
+    r["label"] = y["label"]
+
+# LLM nói POS mà người viết chấm <= 4, hoặc nói NEG mà chấm >= 8.5: một trong hai sai, bỏ cho chắc.
+keep = [r for r in rows if not (r["label"] == "POS" and r["score"] <= 4 or r["label"] == "NEG" and r["score"] >= 8.5)]
+with open("/kaggle/working/sentiment_silver.jsonl", "w", encoding="utf-8") as f:
+    for r in keep:
+        f.write(json.dumps(r, ensure_ascii=False) + "\n")
+print(len(rows), "->", len(keep))
+```
+
+Khoảng 26k review × 300 token, mất 1–2 giờ trên T4. Lưu `sentiment_silver.jsonl` thành Kaggle Dataset để dùng ở bước sau.
+
+### 7c. Fine-tune (notebook riêng, không cần vLLM)
+
+Khởi đầu từ chính model sentiment đang dùng, vì nó đã biết khen/chê, rồi thay đầu ra 3 nhãn bằng 4 nhãn.
+
+```python
+import json, random, numpy as np, torch
+from collections import Counter
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, Trainer, TrainingArguments
+
+LABELS = ["NEG", "NEU", "POS", "MIX"]               # 3 nhãn đầu giữ thứ tự cũ (LABEL_0/1/2)
+L2I = {l: i for i, l in enumerate(LABELS)}
+BASE = "5CD-AI/Vietnamese-Sentiment-visobert"
+tok = AutoTokenizer.from_pretrained(BASE)
+model = AutoModelForSequenceClassification.from_pretrained(
+    BASE, num_labels=4, id2label=dict(enumerate(LABELS)), label2id=L2I, ignore_mismatched_sizes=True)
+
+rows = [json.loads(l) for l in open("/kaggle/input/vietnomnom-silver/sentiment_silver.jsonl", encoding="utf-8")]
+# Tách theo QUÁN: review của cùng một quán hay giống nhau, tách theo câu thì điểm val bị thổi phồng.
+places = sorted({r["place"] for r in rows}); random.Random(0).shuffle(places)
+val_places = set(places[: len(places) // 10])
+
+def encode(r):
+    # Review dài: giữ 128 token đầu và 126 token cuối, vì kết luận ("nói chung là...") thường nằm ở cuối.
+    ids = tok(r["text"], add_special_tokens=False)["input_ids"]
+    if len(ids) > 254:
+        ids = ids[:128] + ids[-126:]
+    ids = [tok.cls_token_id] + ids + [tok.sep_token_id]
+    return {"input_ids": ids, "attention_mask": [1] * len(ids), "labels": L2I[r["label"]]}
+
+train = [encode(r) for r in rows if r["place"] not in val_places]
+val = [encode(r) for r in rows if r["place"] in val_places]
+counts = Counter(x["labels"] for x in train)
+weights = torch.tensor([len(train) / (4 * counts[i]) for i in range(4)], dtype=torch.float)
+print(counts)  # MIX và NEU sẽ ít hơn POS nhiều: trọng số loss bù lại
+
+class WeightedTrainer(Trainer):
+    def compute_loss(self, model, inputs, return_outputs=False, **kw):
+        labels = inputs.pop("labels")
+        out = model(**inputs)
+        loss = torch.nn.functional.cross_entropy(out.logits, labels, weight=weights.to(out.logits.device))
+        return (loss, out) if return_outputs else loss
+
+def collate(batch):
+    n = max(len(x["input_ids"]) for x in batch)
+    pad = lambda k, v: [x[k] + [v] * (n - len(x[k])) for x in batch]
+    return {"input_ids": torch.tensor(pad("input_ids", tok.pad_token_id)),
+            "attention_mask": torch.tensor(pad("attention_mask", 0)),
+            "labels": torch.tensor([x["labels"] for x in batch])}
+
+args = TrainingArguments("/kaggle/working/sent4", per_device_train_batch_size=32, per_device_eval_batch_size=64,
+                         learning_rate=2e-5, num_train_epochs=3, warmup_ratio=0.1, weight_decay=0.01,
+                         fp16=True, eval_strategy="epoch", save_strategy="epoch", load_best_model_at_end=True,
+                         metric_for_best_model="eval_loss", save_total_limit=1, report_to=[])
+WeightedTrainer(model=model, args=args, train_dataset=train, eval_dataset=val, data_collator=collate).train()
+```
+
+### 7d. Đo trên bộ test thật
+
+```python
+from sklearn.metrics import classification_report, confusion_matrix, f1_score
+gold_rows = [r for r in json.load(open("/kaggle/input/vietnomnom-gold/sentiment_to_grade.json"))["reviews"] if r["label"]]
+
+def predict(m, texts):
+    m.eval(); preds = []
+    for i in range(0, len(texts), 64):
+        b = collate([encode({"text": t, "label": "POS"}) for t in texts[i:i + 64]])
+        with torch.no_grad():
+            logits = m(input_ids=b["input_ids"].to(m.device), attention_mask=b["attention_mask"].to(m.device)).logits
+        preds += [m.config.id2label[j] for j in logits.argmax(-1).tolist()]
+    return preds
+
+y = [r["label"] for r in gold_rows]
+new = predict(model, [r["text"] for r in gold_rows])
+old_model = AutoModelForSequenceClassification.from_pretrained(BASE).to(model.device)
+old = [{"LABEL_0": "NEG", "LABEL_1": "NEU", "LABEL_2": "POS"}.get(p, p) for p in predict(old_model, [r["text"] for r in gold_rows])]
+for name, p in [("cũ (3 nhãn)", old), ("mới (4 nhãn)", new)]:
+    print(name, "macro-F1:", round(f1_score(y, p, average="macro", labels=LABELS), 3))
+print(classification_report(y, new, labels=LABELS, digits=3))
+print(confusion_matrix(y, new, labels=LABELS))
+```
+
+**Chỉ giữ model mới khi** macro-F1 cao hơn model cũ và F1 của `MIX` từ khoảng 0.6 trở lên. Nếu `MIX` thấp, xem ma trận nhầm lẫn:
+MIX hay bị nhầm thành POS thì thêm ví dụ MIX (ví dụ chạy lại 7b với `temperature=0.0` riêng cho nhóm điểm 5–7), chứ đừng hạ ngưỡng.
+
+### 7e. Đẩy lên Hub và báo lại
+
+```python
+model.push_to_hub("sirin2412/vietnomnom-sentiment-4c", private=True)
+tok.push_to_hub("sirin2412/vietnomnom-sentiment-4c", private=True)
+```
+
+Sau đó gửi tên model cùng kết quả 7d. Phần tích hợp gồm: đặt `SENTIMENT_MODEL` và `HF_TOKEN` (để tải model private) trên Space,
+cho `sentiment.py` hiểu nhãn `MIX`, hiển thị "Trái chiều" ở trang quán, chạy lại nhãn cho 26k review và chạy lại aspect index.
 
 ---
 

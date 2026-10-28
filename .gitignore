@@ -36,3 +36,6 @@ embeddings_cache.npz
 .DS_Store
 .vscode/
 .idea/
+
+# Hand-labelled Foody reviews: kept off GitHub (see kaggle/README.md, "Lưu ý")
+sentiment_to_grade.json
