@@ -67,10 +67,17 @@ def _newest_review_at(reviews: list[dict]) -> datetime | None:
     return max(stamps) if stamps else None
 
 
-def _needs_work(document: dict, newest: dict, force: bool) -> bool:
-    """True when this restaurant has no aspects, or newer reviews than them."""
-    if force or not document.get("aspectsAt"):
+def _needs_work(
+    document: dict, newest: dict, force: bool, before: datetime | None = None
+) -> bool:
+    """True when this restaurant has no aspects, newer reviews than them, or
+    aspects computed before ``before`` (an older rule)."""
+    stamp = document.get("aspectsAt")
+    if force or not stamp:
         return True
+    if before is not None:
+        # Mongo returns naive UTC datetimes.
+        return stamp < before.astimezone(timezone.utc).replace(tzinfo=None)
     latest = newest.get(document.get("urlGoc"))
     stored = document.get("aspectsNewestReview")
     if latest is None:
@@ -81,11 +88,13 @@ def _needs_work(document: dict, newest: dict, force: bool) -> bool:
     return latest > stored
 
 
-def build(limit: int = 200, force: bool = False) -> dict:
+def build(limit: int = 200, force: bool = False, before: datetime | None = None) -> dict:
     """Compute aspects for up to `limit` restaurants that need it.
 
     Returns a progress report so a caller can loop until `remaining` is zero,
     which is how this runs on a Space without any single request timing out.
+    `before` recomputes everything indexed earlier than that moment -- the
+    resumable form of `force`, for when the verdict rule changes.
     """
     if not settings.mongo_uri:
         return {"error": "MONGO_URI is not set", "processed": 0, "remaining": 0}
@@ -134,7 +143,7 @@ def build(limit: int = 200, force: bool = False) -> dict:
             {"urlGoc": {"$in": list(newest)}},
             {"urlGoc": 1, "aspectsAt": 1, "aspectsNewestReview": 1},
         )
-        if _needs_work(doc, newest, force)
+        if _needs_work(doc, newest, force, before)
     ]
     # Most-reviewed first. A full pass takes hours on a free CPU, so the order
     # decides what a partial index covers -- and the places with the most
@@ -258,6 +267,11 @@ if __name__ == "__main__":  # pragma: no cover - operational entry point
     parser.add_argument("--limit", type=int, default=200, help="per batch")
     parser.add_argument("--force", action="store_true", help="recompute all")
     parser.add_argument(
+        "--before",
+        help="recompute entries indexed before this ISO time (UTC unless "
+        "given); rerun with the same value to resume an interrupted pass",
+    )
+    parser.add_argument(
         "--all", action="store_true", help="loop until nothing remains"
     )
     parser.add_argument("--status", action="store_true")
@@ -266,13 +280,22 @@ if __name__ == "__main__":  # pragma: no cover - operational entry point
     if args.status:
         print(status())
     else:
+        # --force used to be dropped after the first batch, and every later
+        # batch then skipped whatever already had aspects -- that is, all of
+        # it -- so `--force --all` recomputed one batch and stopped. A cutoff
+        # at the start of this run recomputes everything exactly once.
+        before = (
+            datetime.fromisoformat(args.before) if args.before
+            else datetime.now(timezone.utc) if args.force else None
+        )
+        if before is not None and before.tzinfo is None:
+            before = before.replace(tzinfo=timezone.utc)
+        if before is not None:
+            print(f"Recomputing entries indexed before {before.isoformat()}")
         while True:
-            report = build(limit=args.limit, force=args.force)
+            report = build(limit=args.limit, before=before)
             print(report)
             if report.get("error"):
                 raise SystemExit(report["error"])
             if not args.all or report.get("remaining", 0) <= 0:
                 break
-            # After the first forced batch those documents are fresh again, so
-            # the next pass picks up where this one stopped rather than looping.
-            args.force = False

@@ -100,7 +100,21 @@ def check_time_and_party() -> None:
     assert not re.search(search.SOLO_FORMAT_RE, "lẩu 11 người")
 
 
+def check_aspect_cutoff() -> None:
+    from datetime import datetime, timezone
+    from aspect_index import _needs_work
+
+    cutoff = datetime(2026, 10, 27, 14, 33, 16, tzinfo=timezone.utc)
+    old = {"aspectsAt": datetime(2026, 9, 1)}           # naive UTC, as Mongo returns
+    done = {"aspectsAt": datetime(2026, 10, 27, 14, 40)}
+    assert _needs_work(old, {}, False, cutoff)
+    assert not _needs_work(done, {}, False, cutoff)      # resuming skips finished ones
+    assert not _needs_work(old, {}, False)               # no cutoff: old entries are fresh
+    assert _needs_work({}, {}, False, cutoff)            # never indexed
+
+
 if __name__ == "__main__":
+    check_aspect_cutoff()
     check_radius()
     check_embedding_cache()
     check_verdict()
