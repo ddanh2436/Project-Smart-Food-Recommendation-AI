@@ -24,34 +24,79 @@ Frontend (Vercel) → Backend (Render) → AI service (HF Space) → MongoDB Atl
 
 Chỉ Backend gọi service này. Khi đặt `INTERNAL_API_TOKEN`, mọi request phải có header `x-internal-token` trùng khớp.
 
-## Tìm kiếm hoạt động thế nào
+## Kỹ thuật sử dụng
 
-Lọc trước, xếp hạng sau:
+### Tìm kiếm: lọc trước, xếp hạng sau (`intent.py`, `search.py`)
 
-1. **Hiểu câu hỏi** (`intent.py`, `knowledge.py`): tách câu thành món, quận/thành phố, khoảng giá ("150k/người"),
-   điểm tối thiểu, buổi ("tối nay"), số người ("nhóm 5 người"), món cần tránh và kiểu sắp xếp. Câu mà luật không
-   đọc được mới chuyển cho LLM parser (`llm_parser.py`, chỉ bật khi có `GEMINI_API_KEY`).
-2. **Lọc cứng** (`search.py`): quận, giá, điểm, giờ mở cửa theo giờ Việt Nam (UTC+7), bỏ quán suất 1 người khi đi
-   nhóm. Bộ lọc nào làm kết quả rỗng thì được nới ra, và tên bộ lọc đó nằm trong `relaxed_filters`.
-3. **Bán kính quanh người dùng**: khi có GPS, ưu tiên quán trong 15 km, không đủ thì mở rộng lên 50 km. Hai mốc
-   này không áp dụng khi người dùng đã nêu rõ khu vực.
-4. **Xếp hạng lai**: khớp tên, khớp tag món, TF-IDF n-gram ký tự (gõ không dấu "bun bo" vẫn ra "bún bò"), độ
-   tương đồng embedding, cộng thêm điểm đã hiệu chỉnh và khoảng cách.
+1. **Hiểu câu hỏi bằng luật + từ điển** (`intent.py`, `knowledge.py`): tách câu thành món, quận/thành phố, khoảng
+   giá ("150k/người"), điểm tối thiểu, buổi ("tối nay"), số người ("nhóm 5 người"), món cần tránh và kiểu sắp xếp.
+   Các khái niệm như "món nước" hay "trời lạnh" được mở rộng thành danh sách món. Chỉ câu mà luật không đọc được mới
+   chuyển cho LLM parser (`llm_parser.py`), và LLM chỉ được điền các trường có sẵn, không được tự nêu tên quán.
+2. **Lọc cứng có nới dần**: quận, giá, điểm, giờ mở cửa theo giờ Việt Nam (UTC+7), bỏ quán suất 1 người khi đi
+   nhóm. Bộ lọc nào làm kết quả rỗng thì được nới ra và báo lại trong `relaxed_filters`.
+3. **Bán kính quanh người dùng**: khoảng cách haversine, ưu tiên quán trong 15 km, không đủ 5 quán thì mở lên
+   50 km. Không áp dụng khi người dùng đã nêu khu vực.
+4. **Xếp hạng lai**:
+   - khớp tên và tag món theo ranh giới từ;
+   - **TF-IDF n-gram ký tự** trên chữ đã bỏ dấu, nên gõ "bun bo" vẫn ra "bún bò";
+   - **embedding đa ngôn ngữ**, tính một lần cho mọi quán rồi cache theo model và nội dung (`embeddings_cache.npz`);
+   - cộng thêm điểm đã hiệu chỉnh và khoảng cách, rồi **đa dạng hoá** để top kết quả không toàn một món.
+5. **Giải thích kết quả**: mỗi quán kèm lý do (khớp món, đúng giá, điểm, khoảng cách) và lưu ý (sắp đóng cửa…).
 
-Điểm hiển thị ở mọi nơi là **điểm đã hiệu chỉnh** (`diemTrungBinhAdj`, Backend tính): điểm gốc được kéo về mức
-trung bình toàn hệ thống tuỳ theo số review, để quán có vài review 10 điểm không vượt quán có lịch sử dài.
+Điểm hiển thị ở mọi nơi là **điểm đã hiệu chỉnh** (`diemTrungBinhAdj`, Backend tính bằng trung bình Bayes): điểm
+gốc được kéo về mức trung bình toàn hệ thống tuỳ theo số review, để quán có vài review 10 điểm không vượt quán có
+lịch sử dài.
+
+### Chatbot (`chat.py`)
+
+- **Nhiều lượt**: gộp ý định của câu mới với câu trước, nên "rẻ hơn đi" hay "còn quán nào khác" sẽ sửa lại lần tìm
+  trước thay vì tìm lại từ đầu.
+- **Hỏi lại khi câu quá mơ hồ** ("đói quá"): trả về chip gợi ý món, giá, khu vực để người dùng bấm chọn.
+- **Câu trả lời chỉ dùng dữ liệu thật**: nói đúng số quán tìm được, giải thích vì sao ít kết quả, nhắc gọi đặt bàn
+  khi đi nhóm, và nói "chưa có dữ liệu" thay vì bịa.
+- **Hết quán trong quận** thì tìm tiếp quanh những quán đã gợi ý, không lặp lại quán cũ.
+
+### Hiểu review (`review_insights.py`, `aspect_index.py`, `place_qa.py`)
+
+- **ABSA không cần LLM**:
+  - tách review thành mệnh đề, vì người Việt hay khen và chê trong cùng một câu ("ngon nhưng phục vụ chậm");
+  - gán mệnh đề vào 6 khía cạnh (món ăn, giá, phục vụ, không gian, vệ sinh, chỗ để xe) bằng từ khoá;
+  - chấm cảm xúc từng mệnh đề bằng ViSoBERT, chạy theo batch.
+- **Một quy tắc nhãn duy nhất**: khen ≥ 70% là "được khen", khen ≤ 30% và chê nhiều hơn khen là "bị phàn nàn",
+  còn lại là "ý kiến trái chiều". Khía cạnh có dưới 3 lượt nhắc thì không kết luận.
+- **Tính trước cho cả hệ thống** (`aspect_index.py`): ghi kết quả vào từng quán, chạy tăng dần và tiếp tục được
+  nếu bị ngắt. Nhờ vậy câu như "quán sạch sẽ" được trả lời bằng bằng chứng, không phải khớp chữ.
+- **Hỏi đáp về một quán** (`place_qa.py`): trả lời "giá ở đây thế nào?" bằng số liệu và câu trích nguyên văn từ
+  review, kèm điểm chung của quán khi khác điểm con.
+
+### Ảnh (`vision.py`, `kaggle_photo_index.py`)
+
+- **YOLO11m fine-tune** nhận diện 5 món, chia kết quả theo độ chắc chắn (chắc chắn / có thể là / chỉ đoán được
+  nhóm món) để luôn có gợi ý bấm tiếp.
+- **SigLIP2 zero-shot** (chạy offline trên Kaggle) phân loại ảnh bìa của 5.506 quán thành món ăn, logo, menu, biển
+  hiệu… Ảnh không phải món ăn được thay bằng ảnh trung tính.
+
+### Đo chất lượng (`benchmark.py`, `build_qrels.py`)
+
+Bộ đo gồm 136 câu tìm kiếm với đáp án theo **ID quán**, chấm theo thang 0–3. Phần lớn đáp án do luật chấm trên toàn
+bộ quán, phần còn lại lấy top 10 rồi chấm tay (pooling). Chỉ số là nDCG@10, recall@10 và MRR@10, cộng thêm các nhóm
+kiểm tra riêng (khoảng cách, câu khó, câu phải trả rỗng). Model mới chỉ được thay vào khi tốt hơn trên bộ đo này.
 
 ## Model
 
-| Thành phần | Model | Ghi chú |
+| Thành phần | Model | License |
 | --- | --- | --- |
-| Embedding | `paraphrase-multilingual-MiniLM-L12-v2` | đổi qua `EMBEDDING_MODEL`; vector được cache trong `embeddings_cache.npz` |
-| Cảm xúc review | `5CD-AI/Vietnamese-Sentiment-visobert` | 3 nhãn POS/NEU/NEG; bản 4 nhãn (thêm "trái chiều") xem notebook 7 |
-| Nhận diện món | `best.pt` (YOLO11m tự train) | 5 lớp: Bánh mì, Bột chiên, Bún, Gỏi cuốn, Phở |
-| Tìm kiếm từ vựng | TF-IDF n-gram ký tự (scikit-learn) | |
+| Embedding | [paraphrase-multilingual-MiniLM-L12-v2](https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2) | Apache-2.0 |
+| Cảm xúc review | [5CD-AI/Vietnamese-Sentiment-visobert](https://huggingface.co/5CD-AI/Vietnamese-Sentiment-visobert) (3 nhãn) | không công bố; nền ViSoBERT chỉ cho nghiên cứu |
+| Nhận diện món | `best.pt`, fine-tune từ [YOLO11m](https://docs.ultralytics.com/models/yolo11/) | AGPL-3.0 |
+| Phân loại ảnh bìa (offline) | [SigLIP2 ViT-gopt-16-384](https://huggingface.co/timm/ViT-gopt-16-SigLIP2-384) | Apache-2.0 |
+| Parser dự phòng (tuỳ chọn) | Gemini API | điều khoản của Google; sẽ thay bằng parser cục bộ |
+| Tìm kiếm từ vựng | TF-IDF n-gram ký tự (scikit-learn) | BSD-3-Clause |
 
-Kế hoạch fine-tune và encode lại các model trên dữ liệu của web (Kaggle GPU miễn phí) nằm trong
-[kaggle/README.md](kaggle/README.md).
+**Credits, trích dẫn và license đầy đủ của từng model, thư viện và dữ liệu: [CREDITS.md](CREDITS.md).**
+
+Kế hoạch fine-tune và encode lại các model trên dữ liệu của web (Kaggle GPU miễn phí, gán nhãn bằng Gemma 4 E4B,
+sentiment 4 nhãn có thêm "trái chiều") nằm trong [kaggle/README.md](kaggle/README.md).
 
 ## Endpoint
 
