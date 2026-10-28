@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import numpy as np
@@ -126,6 +127,8 @@ NEARBY_RADIUS_KM = 20.0
 # radius is tried in turn and kept if it leaves enough to choose from.
 DEFAULT_RADII_KM = (15.0, 50.0)
 MIN_LOCAL_RESULTS = 5
+
+SOLO_FORMAT_RE = r"(?<!\w)(?:1|một) người(?!\w)"
 
 # Minimum query-match evidence (priors excluded) for a result to count as a
 # real hit. char-ngram TF-IDF gives every row a small non-zero score, so the
@@ -300,7 +303,24 @@ def _apply_dish_filter(
     return frame
 
 
+# The restaurants' clock. datetime.now() is the server's, and the Space runs on
+# UTC, so "đang mở cửa" was answered seven hours off. Vietnam has no DST.
+VN_TZ = timezone(timedelta(hours=7))
+
+# The minute each time word stands for, so "tối nay" asks for a place open at
+# 19:00 rather than one a crawler happened to tag "tối".
+TIME_TAG_MINUTES = {
+    "sáng": 8 * 60, "trưa": 12 * 60, "chiều": 15 * 60, "tối": 19 * 60,
+    "đêm": 23 * 60, "ăn đêm": 23 * 60,
+}
+
+
 def _is_open_now(hours: str) -> bool:
+    now = datetime.now(VN_TZ)
+    return _is_open_at(hours, now.hour * 60 + now.minute)
+
+
+def _is_open_at(hours: str, minutes_now: int) -> bool:
     """Parse "07:00 - 22:00 | 06:00-11:00" style strings.
 
     Unknown hours count as open: the original returned ``False``, which
@@ -308,10 +328,6 @@ def _is_open_now(hours: str) -> bool:
     """
     if not isinstance(hours, str) or not hours.strip():
         return True
-    from datetime import datetime
-
-    now = datetime.now()
-    minutes_now = now.hour * 60 + now.minute
     for window in hours.replace("|", ",").split(","):
         parts = [part.strip() for part in window.split("-")]
         if len(parts) != 2:
@@ -681,9 +697,17 @@ def search(
         )
 
     if intent.time_tags:
-        working = _apply_filter(
-            working, _tag_contains(working, intent.time_tags), "time", relaxed
-        )
+        # The tag, or opening hours that cover that time of day.
+        mask = _tag_contains(working, intent.time_tags)
+        for minute in {TIME_TAG_MINUTES[t] for t in intent.time_tags if t in TIME_TAG_MINUTES}:
+            mask |= working["opening_hours"].map(lambda h, m=minute: _is_open_at(h, m))
+        working = _apply_filter(working, mask, "time", relaxed)
+
+    # "nhóm 5 người": capacity is not in the data, but a place whose name sells
+    # a one-person format ("Lẩu Chay 1 Người") is the wrong answer for a group.
+    if intent.party_size and intent.party_size >= 2:
+        solo = working["name_norm"].str.contains(SOLO_FORMAT_RE, na=False)
+        working = _apply_filter(working, ~solo, "party", relaxed)
 
     if intent.exclude:
         working = _apply_filter(

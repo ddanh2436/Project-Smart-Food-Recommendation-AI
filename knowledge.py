@@ -374,7 +374,8 @@ CANDIDATE_TAGS: list[str] = [
     # Noodle soups
     "bún bò huế", "bún bò", "bún riêu", "bún mắm", "bún chả",
     "bún thịt nướng", "bún đậu mắm tôm", "bún đậu", "bún cá", "bún mọc",
-    "bún thái", "bún ốc", "bún",
+    "bún thái", "bún ốc", "bún thang", "bún măng vịt", "bún măng", "bún",
+    "bánh đa cua", "bánh đa", "cháo lươn", "cháo vịt", "súp cua",
     "phở bò", "phở gà", "phở cuốn", "phở",
     "hủ tiếu nam vang", "hủ tiếu gõ", "hủ tiếu mực", "hủ tiếu",
     "bánh canh cua", "bánh canh ghẹ", "bánh canh cá lóc", "bánh canh",
@@ -386,7 +387,7 @@ CANDIDATE_TAGS: list[str] = [
     # Rice
     "cơm tấm", "cơm sườn", "cơm gà xối mỡ", "cơm gà", "cơm niêu",
     "cơm văn phòng", "cơm chiên", "cơm rang", "cơm lam", "cơm phần",
-    "cơm việt", "cơm", "xôi gà", "xôi mặn", "xôi",
+    "cơm việt", "cơm hến", "cơm chay", "cơm", "xôi gà", "xôi mặn", "xôi xéo", "xôi",
     # Mains / drinking food
     "lẩu thái", "lẩu bò", "lẩu gà", "lẩu dê", "lẩu hải sản", "lẩu mắm",
     "lẩu cá", "lẩu",
@@ -395,10 +396,16 @@ CANDIDATE_TAGS: list[str] = [
     "hải sản", "ốc", "tôm", "cua", "ghẹ", "hàu", "mực", "bạch tuộc",
     "gà rán", "gà luộc", "gà ủ muối", "vịt quay", "heo quay", "phá lấu",
     "dê", "cừu", "ếch", "lươn", "bột chiên", "thịt kho", "cá kho",
+    "chả cá", "nem lụi", "bò lá lốt", "bò tơ", "bê thui", "gà tần",
+    "cá nướng", "vịt nướng", "gỏi cá",
     # Bread & snacks
     "bánh mì chảo", "bánh mì xíu mại", "bánh mì",
     "bánh xèo", "bánh khọt", "bánh cuốn", "bánh ướt", "bánh bèo",
     "bánh bột lọc", "bánh nậm",
+    # Mined from restaurant names the vocabulary missed: "bánh tằm cay cà mau"
+    # read as the dish "cay" and listed chilli duck feet in Đà Nẵng.
+    "bánh tằm", "bánh hỏi", "bánh căn", "bánh lọc", "bánh đúc", "bánh giò",
+    "bánh bao", "bánh rán", "bánh tráng", "nem chua", "nem cua", "bò khô",
     "gỏi cuốn", "bì cuốn", "chả giò", "nem rán",
     "pizza", "hamburger", "sushi", "sashimi", "dimsum", "há cảo", "xíu mại",
     "bánh tráng trộn", "cá viên chiên", "xiên que", "bắp xào",

@@ -18,6 +18,7 @@ import hmac
 import logging
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
@@ -507,15 +508,21 @@ async def search_by_image(file: UploadFile = File(...)) -> dict:
 # Admin
 # ==========================================================================
 @app.post("/admin/aspect-index", dependencies=[Depends(require_admin)])
-async def admin_aspect_index(limit: int = 200, force: bool = False) -> dict:
+async def admin_aspect_index(
+    limit: int = 200, force: bool = False, before: datetime | None = None
+) -> dict:
     """Precompute the per-aspect review verdicts used for aspect search.
 
     Batched on purpose: the full pass runs the sentiment model over every
     review and takes hours on a free CPU. Call it repeatedly until `remaining`
     reaches zero. Most-reviewed restaurants are indexed first, so stopping part
     way still covers the places search actually surfaces.
+
+    To recompute everything after a rule change, pass the same `before` (an
+    ISO time) on every call. `force` recomputes the same first batch on each
+    call, so `remaining` never falls.
     """
-    return aspect_index.build(limit=limit, force=force)
+    return aspect_index.build(limit=limit, force=force, before=before)
 
 
 @app.get("/admin/aspect-index", dependencies=[Depends(require_admin)])

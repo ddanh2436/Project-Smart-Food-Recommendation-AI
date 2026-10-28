@@ -75,6 +75,12 @@ _PRICE_MIN_RE = re.compile(
     rf"(?:trên|hơn|từ|ít nhất|above|over|at least|min)\s*{_AMOUNT}",
     re.IGNORECASE,
 )
+# "lẩu 150k/người", "100k một người": a budget per head, read as a ceiling.
+# No cue word precedes it, so none of the rules above saw it.
+_PRICE_PER_HEAD_RE = re.compile(
+    rf"{_AMOUNT}\s*(?:/|một|mỗi|1)\s*(?:người|khách|suất|pax|person|head)",
+    re.IGNORECASE,
+)
 _PRICE_ABOUT_RE = re.compile(
     rf"(?:khoảng|tầm|cỡ|độ|around|about)\s*{_AMOUNT}",
     re.IGNORECASE,
@@ -370,11 +376,12 @@ def _parse_price(text: str) -> tuple[float | None, float | None, str]:
         if low and high:
             return (min(low, high), max(low, high), _cut(text, match))
 
-    match = _PRICE_MAX_RE.search(text)
-    if match:
-        value = _to_vnd(match.group(1), match.group(2))
-        if value:
-            return (None, value, _cut(text, match))
+    for pattern in (_PRICE_MAX_RE, _PRICE_PER_HEAD_RE):
+        match = pattern.search(text)
+        if match:
+            value = _to_vnd(match.group(1), match.group(2))
+            if value:
+                return (None, value, _cut(text, match))
 
     match = _PRICE_ABOUT_RE.search(text)
     if match:

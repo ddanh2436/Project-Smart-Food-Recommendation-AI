@@ -81,8 +81,43 @@ def check_verdict() -> None:
     assert verdict(0, 0, 0) == "mixed"
 
 
+def check_time_and_party() -> None:
+    import re
+    from intent import parse_intent
+
+    # "tối nay" means open at 19:00, including windows past midnight.
+    assert search._is_open_at("17:00 - 23:00", search.TIME_TAG_MINUTES["tối"])
+    assert not search._is_open_at("06:00 - 11:00", search.TIME_TAG_MINUTES["tối"])
+    assert search._is_open_at("18:00 - 02:00", search.TIME_TAG_MINUTES["đêm"])
+    assert search._is_open_at("", 0)  # unknown hours are not a violation
+
+    intent = parse_intent("nhóm 5 người, tối nay, lẩu 150k/người, Quận 5")
+    assert intent.party_size == 5 and intent.price_max == 150000
+    assert "lẩu" in intent.dishes and "tối" in intent.time_tags
+    assert parse_intent("bánh tằm cay cà mau").dishes[0] == "bánh tằm"
+
+    assert re.search(search.SOLO_FORMAT_RE, "lục bồ đề - lẩu chay 1 người")
+    assert not re.search(search.SOLO_FORMAT_RE, "lẩu 11 người")
+
+
+def check_aspect_cutoff() -> None:
+    from datetime import datetime, timezone
+    from aspect_index import _needs_work
+
+    cutoff = datetime(2026, 10, 27, 14, 33, 16, tzinfo=timezone.utc)
+    old = {"aspectsAt": datetime(2026, 9, 1)}           # naive UTC, as Mongo returns
+    done = {"aspectsAt": datetime(2026, 10, 27, 14, 40)}
+    assert _needs_work(old, {}, False, cutoff)
+    assert not _needs_work(done, {}, False, cutoff)      # resuming skips finished ones
+    assert not _needs_work(old, {}, False)               # no cutoff: old entries are fresh
+    assert _needs_work({}, {}, False, cutoff)            # never indexed
+
+
 if __name__ == "__main__":
+    check_aspect_cutoff()
     check_radius()
     check_embedding_cache()
     check_verdict()
+    check_time_and_party()
+
     print("ranking self-checks passed")

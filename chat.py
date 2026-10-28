@@ -24,9 +24,10 @@ import random
 import re
 
 import pandas as pd
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import text_utils as tu
+from data_store import store
 from intent import Intent, parse_intent
 import place_qa
 from search import SearchResult, row_to_payload, search
@@ -481,7 +482,54 @@ def _success_reply(result: SearchResult, payloads: list[dict], lang: str) -> str
             else f"Excluded places with {excluded}."
         )
 
+    # Read but not checkable: the data has no seating capacity, and saying
+    # nothing read as if "nhóm 5 người" had been ignored.
+    if intent.party_size and intent.party_size >= GROUP_SIZE:
+        parts.append(
+            f"Mình chưa có dữ liệu sức chứa, nên gọi đặt bàn trước cho {intent.party_size} người nhé."
+            if lang == "vi"
+            else f"I have no seating data, so call ahead to book for {intent.party_size}."
+        )
+
     return " ".join(parts)
+
+
+# A party this size or larger is told to book ahead.
+GROUP_SIZE = 4
+
+
+def _search_around(
+    history: list[ChatTurn], intent: Intent, user_gps: list[float] | None,
+    limit: int, prefs: dict | None,
+) -> tuple[SearchResult, pd.DataFrame] | None:
+    """More places near the ones already shown, once their district ran out.
+
+    "Còn quán nào khác gần đó không?" after the four lẩu places in Quận 5 used
+    to loop back to the same four. "Gần đó" means near those places, so the
+    search drops the district and centres on them -- or on the user, when
+    their position is known.
+    """
+    shown = {i for turn in history if turn.role == "bot" for i in turn.ids}
+    if not intent.districts or not shown:
+        return None
+    frame = store.frame
+    placed = frame[frame["id"].isin(shown) & ((frame["lat"] != 0) | (frame["lon"] != 0))]
+    centre = user_gps or (
+        [float(placed["lat"].mean()), float(placed["lon"].mean())] if not placed.empty else None
+    )
+    if not centre:
+        return None
+    wider = replace(intent, districts=[], cities=[], wants_nearby=False)
+    query = " ".join([_compose(wider), *wider.time_tags])
+    result = search(query, user_gps=centre, limit=limit + len(shown), prefs=prefs)
+    rows = result.rows[~result.rows["id"].isin(shown)].head(limit)
+    if rows.empty:
+        return None
+    if not user_gps:
+        # Distances were measured from the centre of the shown places, not
+        # from the user, so they must not be reported as "cách bạn".
+        rows = rows.assign(distance_km=tu.UNKNOWN_DISTANCE)
+    return result, rows
 
 
 def respond(
@@ -647,12 +695,29 @@ def respond(
         )
 
     rows = result.rows.iloc[offset : offset + limit]
+    exhausted = False
     if rows.empty and offset:
-        # Ran off the end of the list: wrap to the start and say so.
+        around = _search_around(history, result.intent, user_gps, limit, prefs)
+        if around:
+            wider, rows = around
+            payloads = [row_to_payload(row, wider.intent) for _, row in rows.iterrows()]
+            area = result.intent.districts[0]
+            lead = (
+                f"Ở {area} mình đã gợi ý hết, đây là các quán gần đó:"
+                if lang == "vi" else f"That's everything in {area}; here are places nearby:"
+            )
+            highlight = _describe_top(payloads[0], lang)
+            return {
+                "reply": " ".join(part for part in (lead, highlight) if part),
+                "results": payloads,
+                "intent": wider.intent.to_dict(),
+                "kind": "results",
+                "total_matches": wider.total_before_ranking,
+                "relaxed_filters": wider.relaxed_filters,
+            }
+        # Nothing further out either: wrap to the start and say so.
         rows = result.rows.head(limit)
         exhausted = True
-    else:
-        exhausted = False
 
     payloads = [row_to_payload(row, result.intent) for _, row in rows.iterrows()]
 
