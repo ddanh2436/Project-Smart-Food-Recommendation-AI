@@ -87,7 +87,7 @@ kiểm tra riêng (khoảng cách, câu khó, câu phải trả rỗng). Model m
 | Thành phần | Model | License |
 | --- | --- | --- |
 | Embedding | [paraphrase-multilingual-MiniLM-L12-v2](https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2) | Apache-2.0 |
-| Cảm xúc review | [5CD-AI/Vietnamese-Sentiment-visobert](https://huggingface.co/5CD-AI/Vietnamese-Sentiment-visobert) (3 nhãn) | không công bố; nền ViSoBERT chỉ cho nghiên cứu |
+| Cảm xúc review | [5CD-AI/Vietnamese-Sentiment-visobert](https://huggingface.co/5CD-AI/Vietnamese-Sentiment-visobert) (3 nhãn), fine-tune thành `Sirin2412/vietnomnom-sentiment-4c` (thêm MIX "trái chiều", private) | không công bố; nền ViSoBERT chỉ cho nghiên cứu |
 | Nhận diện món | `best.pt`, fine-tune từ [YOLO11m](https://docs.ultralytics.com/models/yolo11/) | AGPL-3.0 |
 | Phân loại ảnh bìa (offline) | [SigLIP2 ViT-gopt-16-384](https://huggingface.co/timm/ViT-gopt-16-SigLIP2-384) | Apache-2.0 |
 | Parser dự phòng (tuỳ chọn) | Gemini API | điều khoản của Google; sẽ thay bằng parser cục bộ |
@@ -185,6 +185,7 @@ Xem thêm [DEPLOY.md](DEPLOY.md).
 | `chat.py` | chatbot nhiều lượt |
 | `place_qa.py` | trả lời câu hỏi về một quán cụ thể |
 | `sentiment.py`, `review_insights.py`, `aspect_index.py` | cảm xúc review, tóm tắt theo khía cạnh |
+| `relabel_sentiment.py` | gán lại nhãn cảm xúc cho mọi review khi đổi `SENTIMENT_MODEL` |
 | `vision.py`, `dish_labels.py`, `kaggle_photo_index.py` | nhận diện món, kiểm tra ảnh bìa quán (chạy offline trên Kaggle) |
 | `benchmark.py`, `build_qrels.py`, `search_eval.json`, `search_qrels.json` | bộ đo chất lượng tìm kiếm |
 | `kaggle/README.md` | hướng dẫn notebook fine-tune trên Kaggle |

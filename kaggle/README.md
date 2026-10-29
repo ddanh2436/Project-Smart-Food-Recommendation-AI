@@ -493,6 +493,8 @@ Khoảng 26k review × 300 token, mất 1–2 giờ trên T4. Lưu `sentiment_si
 ### 7c. Fine-tune (notebook riêng, không cần llama.cpp)
 
 Khởi đầu từ chính model sentiment đang dùng, vì nó đã biết khen/chê, rồi thay đầu ra 3 nhãn bằng 4 nhãn.
+Kaggle cài sẵn transformers 5.x, mà tokenizer ViSoBERT không chạy trên bản đó: cell đầu tiên là
+`!pip install -q "transformers~=4.57.1"`, rồi **Restart** kernel trước khi chạy tiếp.
 
 ```python
 import json, random, numpy as np, torch
@@ -522,7 +524,8 @@ def encode(r):
 train = [encode(r) for r in rows if r["place"] not in val_places]
 val = [encode(r) for r in rows if r["place"] in val_places]
 counts = Counter(x["labels"] for x in train)
-weights = torch.tensor([len(train) / (4 * counts[i]) for i in range(4)], dtype=torch.float)
+# Căn bậc hai: trọng số đầy đủ (MIX ~3,7) làm model đoán MIX quá tay (precision 0,36 trên gold).
+weights = torch.tensor([len(train) / (4 * counts[i]) for i in range(4)], dtype=torch.float).sqrt()
 print(counts)  # MIX và NEU sẽ ít hơn POS nhiều: trọng số loss bù lại
 
 class WeightedTrainer(Trainer):
@@ -540,10 +543,36 @@ def collate(batch):
             "labels": torch.tensor([x["labels"] for x in batch])}
 
 args = TrainingArguments("/kaggle/working/sent4", per_device_train_batch_size=32, per_device_eval_batch_size=64,
-                         learning_rate=2e-5, num_train_epochs=3, warmup_ratio=0.1, weight_decay=0.01,
+                         learning_rate=2e-5, num_train_epochs=2, warmup_ratio=0.1, weight_decay=0.01,
                          fp16=True, eval_strategy="epoch", save_strategy="epoch", load_best_model_at_end=True,
                          metric_for_best_model="eval_loss", save_total_limit=1, report_to=[])
 WeightedTrainer(model=model, args=args, train_dataset=train, eval_dataset=val, data_collator=collate).train()
+```
+
+Val loss thấp nhất ở epoch 1 ở cả hai lần chạy thử; `load_best_model_at_end` tự lấy lại epoch đó.
+
+Sau đó chỉnh bias của NEU và MIX trên tập **val silver** (không phải gold) rồi ghi thẳng vào lớp cuối, để model
+đẩy lên Hub tự mang theo:
+
+```python
+from sklearn.metrics import f1_score
+
+def logits_of(m, items):
+    m.eval(); out = []
+    for i in range(0, len(items), 64):
+        b = collate(items[i:i + 64])
+        with torch.no_grad():
+            out.append(m(input_ids=b["input_ids"].to(m.device),
+                         attention_mask=b["attention_mask"].to(m.device)).logits.float().cpu())
+    return torch.cat(out)
+
+val_logits, val_y = logits_of(model, val), [LABELS[x["labels"]] for x in val]
+grid = np.arange(-3, 1.01, 0.25)
+score = lambda bias: f1_score(val_y, [LABELS[j] for j in (val_logits + bias).argmax(-1).tolist()],
+                              average="macro", labels=LABELS)
+best = max((torch.tensor([0, n, 0, m], dtype=torch.float) for n in grid for m in grid), key=score)
+with torch.no_grad():
+    model.classifier.out_proj.bias += best.to(model.device)
 ```
 
 ### 7d. Đo trên bộ test thật
@@ -574,15 +603,21 @@ print(confusion_matrix(y, new, labels=LABELS))
 **Chỉ giữ model mới khi** macro-F1 cao hơn model cũ và F1 của `MIX` từ khoảng 0.6 trở lên. Nếu `MIX` thấp, xem ma trận nhầm lẫn:
 MIX hay bị nhầm thành POS thì thêm ví dụ MIX (ví dụ chạy lại 7b với `temperature=0.0` riêng cho nhóm điểm 5–7), chứ đừng hạ ngưỡng.
 
+**Kết quả lần chạy đầu (400 review gold):** macro-F1 0,739 (model cũ 0,465), accuracy 0,895, F1 MIX 0,537. MIX chưa đạt 0,6
+nhưng vẫn được đưa lên vì model cũ không có nhãn này. Hai cách train khác hẳn nhau (trọng số đầy đủ 3 epoch, trọng số
+căn bậc hai 2 epoch) đều dừng ở MIX khoảng 0,54, nên giới hạn nằm ở nhãn silver: muốn tăng thì sửa prompt 7b và đo mức
+khớp của Gemma riêng trên các review MIX của bộ gold.
+
 ### 7e. Đẩy lên Hub và báo lại
 
 ```python
-model.push_to_hub("sirin2412/vietnomnom-sentiment-4c", private=True)
-tok.push_to_hub("sirin2412/vietnomnom-sentiment-4c", private=True)
+# Tên tài khoản phân biệt hoa thường: "sirin2412" bị từ chối 403, phải là "Sirin2412".
+model.push_to_hub("Sirin2412/vietnomnom-sentiment-4c", private=True)
+tok.push_to_hub("Sirin2412/vietnomnom-sentiment-4c", private=True)
 ```
 
-Sau đó gửi tên model cùng kết quả 7d. Phần tích hợp gồm: đặt `SENTIMENT_MODEL` và `HF_TOKEN` (để tải model private) trên Space,
-cho `sentiment.py` hiểu nhãn `MIX`, hiển thị "Trái chiều" ở trang quán, chạy lại nhãn cho 26k review và chạy lại aspect index.
+Tích hợp: `sentiment.py` đã hiểu nhãn `MIX` và trang quán hiển thị "Trái chiều". Còn lại là đặt `SENTIMENT_MODEL` và
+`HF_TOKEN` (để tải model private) trên Space, gán lại nhãn cho review cũ bằng `relabel_sentiment.py`, rồi chạy lại aspect index.
 
 ---
 

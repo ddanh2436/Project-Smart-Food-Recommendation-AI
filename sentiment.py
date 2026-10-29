@@ -20,7 +20,8 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-# The model emits LABEL_0/1/2; map to names the frontend already understands.
+# The base model emits LABEL_0/1/2; the fine-tuned 4-label one emits NEG/NEU/POS
+# and MIX ("ngon nhưng giá chát"). Map both to names the frontend understands.
 LABEL_ALIASES = {
     "LABEL_0": "NEG",
     "LABEL_1": "NEU",
@@ -31,10 +32,21 @@ LABEL_ALIASES = {
     "NEG": "NEG",
     "NEU": "NEU",
     "POS": "POS",
+    "MIX": "MIX",
 }
 
-# Longest review the model sees; visobert's window is 256 tokens.
-MAX_CHARS = 1200
+# Longest review the model sees; visobert's window is 256 tokens (~1000 chars).
+MAX_CHARS = 1000
+
+
+def _clip(text: str) -> str:
+    """Keep the head and the tail of a long review, as the 4-label model was
+    trained: the verdict ("nói chung là...") is usually at the end, which a
+    plain truncation throws away."""
+    if len(text) <= MAX_CHARS:
+        return text
+    half = MAX_CHARS // 2
+    return text[:half] + " " + text[-half:]
 
 
 class SentimentAnalyzer:
@@ -121,7 +133,7 @@ class SentimentAnalyzer:
         if self._pipeline is None:
             return results
 
-        cleaned = [(text or "").strip()[:MAX_CHARS] for text in texts]
+        cleaned = [_clip((text or "").strip()) for text in texts]
         # Indices of inputs worth sending to the model.
         indices = [i for i, text in enumerate(cleaned) if text]
         if not indices:
